@@ -35,6 +35,7 @@ type GetDefaultVPCResponse struct {
 	TenantID      string `json:"tenant_id"`
 	VPCID         string `json:"vpc_id"`
 	Status        string `json:"status"`
+	BridgeName    string `json:"bridge_name"`
 }
 
 type ValidateVPCRequest struct {

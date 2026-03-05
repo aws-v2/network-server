@@ -16,6 +16,7 @@ type VPCRepository interface {
 	ListByTenant(ctx context.Context, tenantID string) ([]domain.VPC, error)
 	UpdateStatus(ctx context.Context, id string, status string) error
 	ListIncomplete(ctx context.Context) ([]domain.VPC, error)
+	ListAll(ctx context.Context) ([]domain.VPC, error)
 	GetDefaultVPC(ctx context.Context, tenantID string) (*domain.VPC, error)
 }
 
@@ -86,6 +87,7 @@ type ResourceNetworkRepository interface {
 	GetByResource(ctx context.Context, resourceARN string) (*domain.ResourceNetworkAssignment, error)
 	DetachResource(ctx context.Context, resourceARN string) error
 	ListResourcesInVPC(ctx context.Context, vpcID string) ([]domain.ResourceNetworkAssignment, error)
+	ListResourcesInSubnet(ctx context.Context, subnetID string) ([]domain.ResourceNetworkAssignment, error)
 }
 
 type postgresVPCRepository struct {
@@ -134,6 +136,12 @@ func (r *postgresVPCRepository) ListByTenant(ctx context.Context, tenantID strin
 func (r *postgresVPCRepository) ListIncomplete(ctx context.Context) ([]domain.VPC, error) {
 	var vpcs []domain.VPC
 	err := r.db.SelectContext(ctx, &vpcs, "SELECT * FROM vpcs WHERE status != $1", domain.VPCStatusActive)
+	return vpcs, err
+}
+
+func (r *postgresVPCRepository) ListAll(ctx context.Context) ([]domain.VPC, error) {
+	var vpcs []domain.VPC
+	err := r.db.SelectContext(ctx, &vpcs, "SELECT * FROM vpcs")
 	return vpcs, err
 }
 
@@ -550,5 +558,11 @@ func (r *postgresResourceNetworkRepository) DetachResource(ctx context.Context, 
 func (r *postgresResourceNetworkRepository) ListResourcesInVPC(ctx context.Context, vpcID string) ([]domain.ResourceNetworkAssignment, error) {
 	var assignments []domain.ResourceNetworkAssignment
 	err := r.db.SelectContext(ctx, &assignments, "SELECT * FROM resource_network_assignments WHERE vpc_id = $1", vpcID)
+	return assignments, err
+}
+
+func (r *postgresResourceNetworkRepository) ListResourcesInSubnet(ctx context.Context, subnetID string) ([]domain.ResourceNetworkAssignment, error) {
+	var assignments []domain.ResourceNetworkAssignment
+	err := r.db.SelectContext(ctx, &assignments, "SELECT * FROM resource_network_assignments WHERE subnet_id = $1", subnetID)
 	return assignments, err
 }
