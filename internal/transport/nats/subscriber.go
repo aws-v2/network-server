@@ -343,11 +343,12 @@ func (s *Subscriber) Subscribe() error {
 		l := logger.WithContext(ctx).With(zap.String("tenant_id", req.TenantID))
 		l.Info("Received NATS resolve default network request")
 
-		vpcID, subnetID, err := s.netService.ResolveDefaultNetwork(ctx, req.TenantID)
+		vpcID, subnetID, bridgeName, err := s.netService.ResolveDefaultNetwork(ctx, req.TenantID)
 		resp := domain.ResolveDefaultVPCResponse{
 			CorrelationID: req.CorrelationID,
 			VPCID:         vpcID,
 			SubnetID:      subnetID,
+			BridgeName:    bridgeName,
 		}
 
 		if err != nil {

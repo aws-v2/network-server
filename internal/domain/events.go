@@ -119,6 +119,7 @@ type ResolveDefaultVPCResponse struct {
 	CorrelationID string `json:"correlation_id"`
 	VPCID         string `json:"vpc_id"`
 	SubnetID      string `json:"subnet_id"`
+	BridgeName    string `json:"bridge_name"`
 }
 
 // Phase 12: Compute Registry

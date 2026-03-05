@@ -3,7 +3,6 @@ package driver
 import (
 	"fmt"
 	"os/exec"
-	"runtime"
 
 	"go.uber.org/zap"
 )
@@ -12,6 +11,7 @@ type BridgeDriver interface {
 	CreateBridge(name string) error
 	DeleteBridge(name string) error
 	Exists(name string) (bool, error)
+	AssignIP(name, cidr string) error
 }
 
 type linuxBridgeDriver struct{}
@@ -21,11 +21,6 @@ func NewBridgeDriver() BridgeDriver {
 }
 
 func (d *linuxBridgeDriver) CreateBridge(name string) error {
-	if runtime.GOOS != "linux" {
-		zap.L().Warn("Skipping bridge creation: not on Linux", zap.String("bridge", name))
-		return nil
-	}
-
 	exists, err := d.Exists(name)
 	if err != nil {
 		return err
@@ -53,11 +48,6 @@ func (d *linuxBridgeDriver) CreateBridge(name string) error {
 }
 
 func (d *linuxBridgeDriver) DeleteBridge(name string) error {
-	if runtime.GOOS != "linux" {
-		zap.L().Warn("Skipping bridge deletion: not on Linux", zap.String("bridge", name))
-		return nil
-	}
-
 	zap.L().Info("Deleting Linux bridge", zap.String("bridge", name))
 	cmd := exec.Command("ip", "link", "del", "name", name)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -68,10 +58,6 @@ func (d *linuxBridgeDriver) DeleteBridge(name string) error {
 }
 
 func (d *linuxBridgeDriver) Exists(name string) (bool, error) {
-	if runtime.GOOS != "linux" {
-		return false, nil
-	}
-
 	cmd := exec.Command("ip", "link", "show", name)
 	err := cmd.Run()
 	if err != nil {
@@ -81,4 +67,19 @@ func (d *linuxBridgeDriver) Exists(name string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func (d *linuxBridgeDriver) AssignIP(name, cidr string) error {
+	zap.L().Info("Assigning IP to bridge", zap.String("bridge", name), zap.String("cidr", cidr))
+
+	// ip addr add <cidr> dev <name>
+	cmd := exec.Command("ip", "addr", "add", cidr, "dev", name)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// Ignore if the address already exists (exit code 2 usually, output contains "File exists")
+		// Wait, sometimes it's better to just return an error but maybe log it.
+		// Actually, let's just return the error if it fails.
+		return fmt.Errorf("failed to assign IP to bridge %s: %w (output: %s)", name, err, string(out))
+	}
+
+	return nil
 }

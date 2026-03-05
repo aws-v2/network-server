@@ -3,7 +3,6 @@ package driver
 import (
 	"fmt"
 	"os/exec"
-	"runtime"
 
 	"go.uber.org/zap"
 )
@@ -20,11 +19,6 @@ func NewRoutingDriver() RoutingDriver {
 }
 
 func (d *linuxRoutingDriver) AddRoute(bridgeName, destination, gateway string) error {
-	if runtime.GOOS != "linux" {
-		zap.L().Warn("Skipping route addition: not on Linux", zap.String("bridge", bridgeName), zap.String("destination", destination))
-		return nil
-	}
-
 	// Check if route already exists
 	checkCmd := exec.Command("ip", "route", "show", "to", destination, "dev", bridgeName)
 	if out, err := checkCmd.Output(); err == nil && len(out) > 0 {
@@ -43,10 +37,6 @@ func (d *linuxRoutingDriver) AddRoute(bridgeName, destination, gateway string) e
 }
 
 func (d *linuxRoutingDriver) DeleteRoute(bridgeName, destination, gateway string) error {
-	if runtime.GOOS != "linux" {
-		return nil
-	}
-
 	zap.L().Info("Deleting system route", zap.String("bridge", bridgeName), zap.String("destination", destination))
 
 	cmd := exec.Command("ip", "route", "del", destination, "dev", bridgeName)
