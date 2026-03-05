@@ -1,0 +1,7 @@
+### Network Service API Tests
+
+@baseUrl = http://localhost:8099
+
+### Health Check
+GET {{baseUrl}}/health
+Accept: application/json
