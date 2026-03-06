@@ -114,11 +114,12 @@ func main() {
 	bridgeDriver := driver.NewBridgeDriver()
 	iptablesDriver := driver.NewIptablesDriver()
 	routingDriver := driver.NewRoutingDriver()
+	dockerNetworkDriver := driver.NewDockerNetworkDriver()
 
 	// 6. Setup Services
 	netService := service.NewNetworkService(
 		db.DB, vpcRepo, subnetRepo, igwRepo, rtRepo, routeRepo, sgRepo, cidrRepo, eipRepo,
-		bridgeDriver, iptablesDriver, routingDriver, resourceRepo, netAssignRepo, computeReg,
+		bridgeDriver, iptablesDriver, routingDriver, dockerNetworkDriver, resourceRepo, netAssignRepo, computeReg,
 	)
 
 	// Startup Reconciliation

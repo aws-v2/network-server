@@ -8,5 +8,6 @@ type ResourceNetworkAssignment struct {
 	VPCID       string    `db:"vpc_id" json:"vpc_id"`
 	SubnetID    string    `db:"subnet_id" json:"subnet_id"`
 	PrivateIP   string    `db:"private_ip" json:"private_ip"`
+	PublicIP    string    `db:"public_ip" json:"public_ip,omitempty"`
 	AssignedAt  time.Time `db:"assigned_at" json:"assigned_at"`
 }

@@ -91,6 +91,7 @@ type ResolveResourceResponse struct {
 	VPCID         string `json:"vpc_id"`
 	SubnetID      string `json:"subnet_id"`
 	PrivateIP     string `json:"private_ip"`
+	PublicIP      string `json:"public_ip,omitempty"`
 }
 
 type ListVPCResourcesRequest struct {
@@ -175,4 +176,40 @@ type ComputeLifecycleEvent struct {
 	EventType     ComputeEventType    `json:"event_type"`
 	Timestamp     time.Time           `json:"timestamp"`
 	Payload       ComputeEventPayload `json:"payload"`
+}
+
+// EIP Management
+type AllocateEIPRequest struct {
+	CorrelationID string `json:"correlation_id"`
+}
+
+type AllocateEIPResponse struct {
+	CorrelationID string `json:"correlation_id"`
+	Success       bool   `json:"success"`
+	EIPID         string `json:"eip_id,omitempty"`
+	PublicIP      string `json:"public_ip,omitempty"`
+	Error         string `json:"error,omitempty"`
+}
+
+type AssociateEIPRequest struct {
+	CorrelationID string `json:"correlation_id"`
+	EIPID         string `json:"eip_id"`
+	InstanceID    string `json:"instance_id"`
+}
+
+type AssociateEIPResponse struct {
+	CorrelationID string `json:"correlation_id"`
+	Success       bool   `json:"success"`
+	Error         string `json:"error,omitempty"`
+}
+
+type DisassociateEIPRequest struct {
+	CorrelationID string `json:"correlation_id"`
+	EIPID         string `json:"eip_id"`
+}
+
+type DisassociateEIPResponse struct {
+	CorrelationID string `json:"correlation_id"`
+	Success       bool   `json:"success"`
+	Error         string `json:"error,omitempty"`
 }

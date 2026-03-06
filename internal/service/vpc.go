@@ -208,11 +208,40 @@ func (s *networkService) provisionVPCInternal(ctx context.Context, tenantID, vpc
 		return nil, fmt.Errorf("failed to create bridge: %w", err)
 	}
 
-	gatewayCIDR := fmt.Sprintf("%s.1.1/24", basePrefix)
-	if err := s.bridgeDriver.AssignIP(bridgeName, gatewayCIDR); err != nil {
-		l.Error("OS provisioning failed: bridge IP assignment error", zap.Error(err), zap.String("vpc_id", vpcID))
-		s.vpcRepo.UpdateStatus(ctx, vpcID, domain.VPCStatusError)
-		return nil, fmt.Errorf("failed to assign IP to bridge: %w", err)
+	// 13.2 Register bridge with Docker so containers can attach to it
+	// We use the public subnet CIDR for this. The gateway is the first IP in that subnet.
+	gatewayIP := DeriveGateway(publicSubnet.CIDRBlock)
+	if gatewayIP != "" {
+		if err := s.dockerNetworkDriver.RegisterBridge(bridgeName, publicSubnet.CIDRBlock, gatewayIP); err != nil {
+			l.Warn("Failed to register bridge with Docker", zap.Error(err), zap.String("bridge", bridgeName))
+			// non-fatal for EC2 VMs, but might cause issues for RDS containers later
+		}
+	} else {
+		l.Error("Failed to derive gateway IP for Docker network registration", zap.String("cidr", publicSubnet.CIDRBlock))
+	}
+
+	// ALWAYS ensure the bridge is UP.
+	if err := s.bridgeDriver.BringUp(bridgeName); err != nil {
+		l.Warn("Failed to bring up bridge during provisioning", zap.Error(err), zap.String("bridge", bridgeName))
+	}
+
+	// Assign gateway IPs for ALL subnets in this VPC.
+	// Each subnet x.x.y.0/24 gets a gateway at x.x.y.1 on the bridge.
+	subnets, err := s.subnetRepo.ListByVPC(ctx, vpcID)
+	if err != nil {
+		l.Error("OS provisioning failed: could not list subnets for IP assignment", zap.Error(err), zap.String("vpc_id", vpcID))
+	} else {
+		for _, sn := range subnets {
+			gateway := DeriveGateway(sn.CIDRBlock)
+			if gateway != "" {
+				gatewayCIDR := fmt.Sprintf("%s/24", gateway)
+				if err := s.bridgeDriver.AssignIP(bridgeName, gatewayCIDR); err != nil {
+					l.Error("OS provisioning: gateway IP assignment error", zap.Error(err), zap.String("subnet", sn.ID), zap.String("ip", gatewayCIDR))
+				} else {
+					l.Info("Gateway IP assigned to bridge", zap.String("subnet", sn.ID), zap.String("cidr", gatewayCIDR))
+				}
+			}
+		}
 	}
 
 	// 13.2 Setup MASQUERADE
