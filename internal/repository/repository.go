@@ -90,6 +90,13 @@ type ResourceNetworkRepository interface {
 	ListResourcesInSubnet(ctx context.Context, subnetID string) ([]domain.ResourceNetworkAssignment, error)
 }
 
+type RDSPortRepository interface {
+	Allocate(ctx context.Context, tenantID, resourceID, privateIP string, privatePort int, publicIP string) (int, error)
+	Release(ctx context.Context, resourceID string) error
+	GetByResourceID(ctx context.Context, resourceID string) (*domain.RDSPortAllocation, error)
+	ListActive(ctx context.Context) ([]*domain.RDSPortAllocation, error)
+}
+
 type postgresVPCRepository struct {
 	db *sqlx.DB
 }

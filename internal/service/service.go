@@ -38,6 +38,11 @@ type NetworkService interface {
 	// Reconciliation
 	ReconcileVPCs(ctx context.Context) error
 
+	// RDS Port Management
+	ExposeRDSContainer(ctx context.Context, tenantID, resourceID, privateIP, publicIP string, privatePort int) (int, error)
+	UnexposeRDSContainer(ctx context.Context, resourceID string) error
+	ReconcileRDSPorts(ctx context.Context) error
+
 	// Compute Registry (Phase 12)
 	RegisterComputeInstance(ctx context.Context, instance domain.ComputeInstance) error
 	UpdateComputeInstanceHealth(ctx context.Context, instanceID string, status domain.InstanceStatus) error
@@ -60,6 +65,7 @@ type networkService struct {
 	eipRepo             repository.ElasticIPRepository
 	resourceRepo        repository.ResourceVPCRepository
 	netAssignRepo       repository.ResourceNetworkRepository
+	rdsPortRepo         repository.RDSPortRepository
 	computeReg          registry.ComputeRegistry
 	bridgeDriver        driver.BridgeDriver
 	iptablesDriver      driver.IptablesDriver
@@ -83,6 +89,7 @@ func NewNetworkService(
 	dockerNetworkDriver driver.DockerNetworkDriver,
 	resourceRepo repository.ResourceVPCRepository,
 	netAssignRepo repository.ResourceNetworkRepository,
+	rdsPortRepo repository.RDSPortRepository,
 	computeReg registry.ComputeRegistry,
 ) NetworkService {
 	return &networkService{
@@ -97,6 +104,7 @@ func NewNetworkService(
 		eipRepo:             eipRepo,
 		resourceRepo:        resourceRepo,
 		netAssignRepo:       netAssignRepo,
+		rdsPortRepo:         rdsPortRepo,
 		computeReg:          computeReg,
 		bridgeDriver:        bridgeDriver,
 		iptablesDriver:      iptablesDriver,
