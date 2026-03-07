@@ -43,6 +43,9 @@ const (
 	SubjectEIPAllocate     = "dev.network.v1.eip.allocate"
 	SubjectEIPAssociate    = "dev.network.v1.eip.associate"
 	SubjectEIPDisassociate = "dev.network.v1.eip.disassociate"
+
+	SubjectRDSExpose   = "dev.network.v1.rds.expose"
+	SubjectRDSUnexpose = "dev.network.v1.rds.unexpose"
 )
 
 type Subscriber struct {
@@ -767,6 +770,90 @@ func (s *Subscriber) Subscribe() error {
 		data, _ := json.Marshal(resp)
 		s.nc.Publish(msg.Reply, data)
 	})
+
+	// 21. Expose RDS Container (Request-Reply)
+	_, err = s.nc.Subscribe(SubjectRDSExpose, func(msg *nats.Msg) {
+		var req struct {
+			CorrelationID string `json:"correlation_id"`
+			TenantID      string `json:"tenant_id"`
+			ResourceID    string `json:"resource_id"`
+			PrivateIP     string `json:"private_ip"`
+			PrivatePort   int    `json:"private_port"`
+			PublicIP      string `json:"public_ip"`
+		}
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
+
+		ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
+		l := logger.WithContext(ctx).With(
+			zap.String("tenant_id", req.TenantID),
+			zap.String("resource_id", req.ResourceID),
+			zap.String("private_ip", req.PrivateIP),
+			zap.Int("private_port", req.PrivatePort),
+			zap.String("public_ip", req.PublicIP),
+		)
+		l.Info("[RDS-EXPOSE] Received expose request")
+
+		publicPort, err := s.netService.ExposeRDSContainer(ctx, req.TenantID, req.ResourceID, req.PrivateIP, req.PublicIP, req.PrivatePort)
+
+		resp := struct {
+			Success    bool   `json:"success"`
+			PublicPort int    `json:"public_port"`
+			Error      string `json:"error"`
+		}{
+			Success:    err == nil,
+			PublicPort: publicPort,
+		}
+		if err != nil {
+			resp.Error = err.Error()
+			l.Error("[RDS-EXPOSE] Failed to expose RDS container", zap.Error(err))
+		} else {
+			l.Info("[RDS-EXPOSE] Successfully exposed RDS container", zap.Int("public_port", publicPort))
+		}
+
+		data, _ := json.Marshal(resp)
+		s.nc.Publish(msg.Reply, data)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", SubjectRDSExpose, err)
+	}
+
+	// 22. Unexpose RDS Container (Request-Reply)
+	_, err = s.nc.Subscribe(SubjectRDSUnexpose, func(msg *nats.Msg) {
+		var req struct {
+			CorrelationID string `json:"correlation_id"`
+			ResourceID    string `json:"resource_id"`
+		}
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
+
+		ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
+		l := logger.WithContext(ctx).With(zap.String("resource_id", req.ResourceID))
+		l.Info("[RDS-EXPOSE] Received unexpose request")
+
+		err := s.netService.UnexposeRDSContainer(ctx, req.ResourceID)
+
+		resp := struct {
+			Success bool   `json:"success"`
+			Error   string `json:"error"`
+		}{
+			Success: err == nil,
+		}
+		if err != nil {
+			resp.Error = err.Error()
+			l.Error("[RDS-EXPOSE] Failed to unexpose RDS container", zap.Error(err))
+		} else {
+			l.Info("[RDS-EXPOSE] Successfully unexposed RDS container")
+		}
+
+		data, _ := json.Marshal(resp)
+		s.nc.Publish(msg.Reply, data)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", SubjectRDSUnexpose, err)
+	}
 
 	return nil
 }
