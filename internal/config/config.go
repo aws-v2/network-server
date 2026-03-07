@@ -70,6 +70,7 @@ func Load() (*Config, error) {
 			Password: getEnv("NATS_PASSWORD", ""),
 		},
 		Server: ServerConfig{
+			HTTPPort:        getEnvInt("HTTP_PORT", 8081),
 			PublicInterface: getEnv("PUBLIC_INTERFACE", "eth0"),
 		},
 		Profile: getEnv("APP_PROFILE", "DEV"),

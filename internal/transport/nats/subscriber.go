@@ -19,10 +19,12 @@ const (
 	SubjectUserRegistered = "dev.auth.v1.user.registered"
 	SubjectVPCCreate      = "dev.network.v1.vpc.create"
 	SubjectVPCCreated     = "dev.network.v1.vpc.created"
+	SubjectVPCList        = "dev.network.v1.vpc.list"
 
 	SubjectVPCDefaultGet     = "dev.network.v1.vpc.default.get"
 	SubjectVPCValidate       = "dev.network.v1.vpc.validate"
 	SubjectVPCDefaultResolve = "dev.network.v1.vpc.default.resolve"
+	SubjectVPCReconcile      = "dev.network.v1.vpc.reconcile"
 
 	SubjectResourceAttach = "dev.network.v1.resource.attach"
 	SubjectResourceDetach = "dev.network.v1.resource.detach"
@@ -160,6 +162,41 @@ func (s *Subscriber) Subscribe() error {
 
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to %s: %w", SubjectVPCCreate, err)
+	}
+
+	// 2b. List VPCs (Request-Reply)
+	_, err = s.nc.Subscribe(SubjectVPCList, func(msg *nats.Msg) {
+		var req domain.ListVPCsRequest
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
+
+		ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
+		l := logger.WithContext(ctx)
+		l.Info("Listing VPCs", zap.String("tenant_id", req.TenantID))
+
+		vpcs, err := s.netService.ListVPCs(ctx, req.TenantID)
+		resp := domain.ListVPCsResponse{
+			CorrelationID: req.CorrelationID,
+			TenantID:      req.TenantID,
+		}
+		
+		if vpcs == nil {
+			resp.VPCs = []domain.VPC{}
+		} else {
+			resp.VPCs = vpcs
+		}
+
+		if err != nil {
+			resp.Error = err.Error()
+			l.Error("Failed to list VPCs", zap.Error(err))
+		}
+
+		data, _ := json.Marshal(resp)
+		s.nc.Publish(msg.Reply, data)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", SubjectVPCList, err)
 	}
 
 	// 3. Resolve Default VPC (Request-Reply)
@@ -566,10 +603,16 @@ func (s *Subscriber) Subscribe() error {
 		// Build the resource ARN for this instance
 		resourceARN := fmt.Sprintf("arn:aws:ec2:::%s", req.InstanceID)
 
-		// Step 1: resolve the default VPC subnet and bridge
-		vpcID, subnetID, bridgeName, err := s.netService.ResolveDefaultNetwork(ctx, req.TenantID)
+		// Step 1: resolve the VPC subnet and bridge
+		var vpcID, subnetID, bridgeName string
+		if req.VPCID != "" {
+			vpcID, subnetID, bridgeName, err = s.netService.ResolveVPCNetwork(ctx, req.TenantID, req.VPCID)
+		} else {
+			vpcID, subnetID, bridgeName, err = s.netService.ResolveDefaultNetwork(ctx, req.TenantID)
+		}
+
 		if err != nil {
-			l.Error("Failed to resolve default network for instance prepare", zap.Error(err))
+			l.Error("Failed to resolve network for instance prepare", zap.Error(err))
 			resp, _ := json.Marshal(map[string]interface{}{
 				"correlation_id": req.CorrelationID,
 				"success":        false,
@@ -577,11 +620,6 @@ func (s *Subscriber) Subscribe() error {
 			})
 			s.nc.Publish(msg.Reply, resp)
 			return
-		}
-
-		// Use the requested VPC if provided, otherwise use default
-		if req.VPCID != "" {
-			vpcID = req.VPCID
 		}
 
 		// Step 2: attach resource to subnet — this allocates the IP from the CIDR pool
@@ -772,6 +810,34 @@ func (s *Subscriber) Subscribe() error {
 		if err != nil {
 			resp.Error = err.Error()
 			l.Error("Failed to disassociate EIP", zap.Error(err))
+		}
+
+		data, _ := json.Marshal(resp)
+		s.nc.Publish(msg.Reply, data)
+	})
+
+	// 20b. Reconcile VPCs (Request-Reply)
+	_, err = s.nc.Subscribe(SubjectVPCReconcile, func(msg *nats.Msg) {
+		var req domain.ReconcileVPCsRequest
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
+
+		ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
+		l := logger.WithContext(ctx)
+		l.Info("Received VPC reconciliation request")
+
+		err := s.netService.ReconcileVPCs(ctx)
+		resp := domain.ReconcileVPCsResponse{
+			CorrelationID: req.CorrelationID,
+			Success:       err == nil,
+		}
+
+		if err == nil {
+			resp.Message = "VPC reconciliation completed successfully"
+		} else {
+			resp.Error = err.Error()
+			l.Error("Failed to reconcile VPCs", zap.Error(err))
 		}
 
 		data, _ := json.Marshal(resp)

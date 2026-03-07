@@ -13,6 +13,7 @@ import (
 type NetworkService interface {
 	CreateDefaultVPC(ctx context.Context, tenantID, tenantName string) (*domain.VPC, error)
 	CreateVPC(ctx context.Context, tenantID, vpcName string) (*domain.VPC, error)
+	ListVPCs(ctx context.Context, tenantID string) ([]domain.VPC, error)
 
 	// Elastic IP Management
 	AllocateEIP(ctx context.Context) (*domain.ElasticIP, error)
@@ -24,6 +25,7 @@ type NetworkService interface {
 	GetDefaultVPC(ctx context.Context, tenantID string) (*domain.VPC, error)
 	ValidateVPC(ctx context.Context, tenantID, vpcID string) (bool, string, string, error)
 	ResolveDefaultNetwork(ctx context.Context, tenantID string) (string, string, string, error)
+	ResolveVPCNetwork(ctx context.Context, tenantID, vpcID string) (string, string, string, error)
 
 	// Resource Assignments (Legacy VPC-only - deprecated)
 	AttachResourceToVPC(ctx context.Context, tenantID, resourceARN, vpcID string) error

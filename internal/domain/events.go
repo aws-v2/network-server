@@ -24,6 +24,29 @@ type VPCCreatedEvent struct {
 	Status        string `json:"status"`
 }
 
+type ListVPCsRequest struct {
+	CorrelationID string `json:"correlation_id"`
+	TenantID      string `json:"tenant_id"`
+}
+
+type ListVPCsResponse struct {
+	CorrelationID string `json:"correlation_id"`
+	TenantID      string `json:"tenant_id"`
+	VPCs          []VPC  `json:"vpcs"`
+	Error         string `json:"error,omitempty"`
+}
+
+type ReconcileVPCsRequest struct {
+	CorrelationID string `json:"correlation_id"`
+}
+
+type ReconcileVPCsResponse struct {
+	CorrelationID string `json:"correlation_id"`
+	Success       bool   `json:"success"`
+	Message       string `json:"message,omitempty"`
+	Error         string `json:"error,omitempty"`
+}
+
 // Phase 3: Resolution & Validation
 type GetDefaultVPCRequest struct {
 	CorrelationID string `json:"correlation_id"`

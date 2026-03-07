@@ -117,20 +117,20 @@ func (d *linuxIptablesDriver) SetupRDSDNAT(publicIP string, publicPort int, priv
 	port := fmt.Sprint(publicPort)
 
 	// PREROUTING — handles traffic from external machines
-	exists, _ := d.ruleExists("nat", "PREROUTING", "-p", "tcp", "-d", publicIP, "--dport", port, "-j", "DNAT", dest)
+	exists, _ := d.ruleExists("nat", "PREROUTING", "-d", publicIP, "-p", "tcp", "--dport", port, "-j", "DNAT", dest)
 	if !exists {
 		zap.L().Info(fmt.Sprintf("[IPTABLES] Adding RDS DNAT rule (PREROUTING): %s:%d -> %s:%d", publicIP, publicPort, privateIP, privatePort))
-		cmd := exec.Command("iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "-d", publicIP, "--dport", port, "-j", "DNAT", dest)
+		cmd := exec.Command("iptables", "-t", "nat", "-A", "PREROUTING", "-d", publicIP, "-p", "tcp", "--dport", port, "-j", "DNAT", dest)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to add RDS DNAT PREROUTING rule: %w (output: %s)", err, string(out))
 		}
 	}
 
 	// OUTPUT — handles traffic originating from this machine (local psql, curl, etc.)
-	exists, _ = d.ruleExists("nat", "OUTPUT", "-p", "tcp", "-d", publicIP, "--dport", port, "-j", "DNAT", dest)
+	exists, _ = d.ruleExists("nat", "OUTPUT", "-d", publicIP, "-p", "tcp", "--dport", port, "-j", "DNAT", dest)
 	if !exists {
 		zap.L().Info(fmt.Sprintf("[IPTABLES] Adding RDS DNAT rule (OUTPUT): %s:%d -> %s:%d", publicIP, publicPort, privateIP, privatePort))
-		cmd := exec.Command("iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp", "-d", publicIP, "--dport", port, "-j", "DNAT", dest)
+		cmd := exec.Command("iptables", "-t", "nat", "-A", "OUTPUT", "-d", publicIP, "-p", "tcp", "--dport", port, "-j", "DNAT", dest)
 		if _, err := cmd.CombinedOutput(); err != nil {
 			zap.L().Warn("[IPTABLES] Failed to add RDS DNAT OUTPUT rule (non-fatal)", zap.Error(err))
 		}
@@ -145,13 +145,13 @@ func (d *linuxIptablesDriver) SetupRDSSNAT(privateIP string, privatePort int, pu
 		return nil
 	}
 
-	exists, _ := d.ruleExists("nat", "POSTROUTING", "-p", "tcp", "-s", privateIP, "--sport", fmt.Sprint(privatePort), "-j", "SNAT", fmt.Sprintf("--to-source=%s:%d", publicIP, publicPort))
+	exists, _ := d.ruleExists("nat", "POSTROUTING", "-s", privateIP, "-p", "tcp", "--sport", fmt.Sprint(privatePort), "-j", "SNAT", fmt.Sprintf("--to-source=%s:%d", publicIP, publicPort))
 	if exists {
 		return nil
 	}
 
 	zap.L().Info(fmt.Sprintf("[IPTABLES] Adding RDS SNAT rule: %s:%d -> %s:%d", privateIP, privatePort, publicIP, publicPort))
-	cmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-p", "tcp", "-s", privateIP, "--sport", fmt.Sprint(privatePort), "-j", "SNAT", fmt.Sprintf("--to-source=%s:%d", publicIP, publicPort))
+	cmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", privateIP, "-p", "tcp", "--sport", fmt.Sprint(privatePort), "-j", "SNAT", fmt.Sprintf("--to-source=%s:%d", publicIP, publicPort))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to add RDS SNAT rule: %w (output: %s)", err, string(out))
 	}
@@ -167,11 +167,11 @@ func (d *linuxIptablesDriver) RemoveRDSDNAT(publicIP string, publicPort int, pri
 	port := fmt.Sprint(publicPort)
 
 	// Remove from PREROUTING
-	cmd := exec.Command("iptables", "-t", "nat", "-D", "PREROUTING", "-p", "tcp", "-d", publicIP, "--dport", port, "-j", "DNAT", dest)
+	cmd := exec.Command("iptables", "-t", "nat", "-D", "PREROUTING", "-d", publicIP, "-p", "tcp", "--dport", port, "-j", "DNAT", dest)
 	_ = cmd.Run()
 
 	// Remove from OUTPUT
-	cmd = exec.Command("iptables", "-t", "nat", "-D", "OUTPUT", "-p", "tcp", "-d", publicIP, "--dport", port, "-j", "DNAT", dest)
+	cmd = exec.Command("iptables", "-t", "nat", "-D", "OUTPUT", "-d", publicIP, "-p", "tcp", "--dport", port, "-j", "DNAT", dest)
 	_ = cmd.Run()
 
 	return nil
@@ -182,7 +182,7 @@ func (d *linuxIptablesDriver) RemoveRDSSNAT(privateIP string, privatePort int, p
 		return nil
 	}
 	zap.L().Info("[IPTABLES] Removing RDS SNAT rule")
-	cmd := exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING", "-p", "tcp", "-s", privateIP, "--sport", fmt.Sprint(privatePort), "-j", "SNAT", fmt.Sprintf("--to-source=%s:%d", publicIP, publicPort))
+	cmd := exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING", "-s", privateIP, "-p", "tcp", "--sport", fmt.Sprint(privatePort), "-j", "SNAT", fmt.Sprintf("--to-source=%s:%d", publicIP, publicPort))
 	_ = cmd.Run() // Ignore error if rule doesn't exist
 	return nil
 }
