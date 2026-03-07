@@ -71,6 +71,7 @@ type networkService struct {
 	iptablesDriver      driver.IptablesDriver
 	routingDriver       driver.RoutingDriver
 	dockerNetworkDriver driver.DockerNetworkDriver
+	publicInterface     string
 }
 
 func NewNetworkService(
@@ -91,6 +92,7 @@ func NewNetworkService(
 	netAssignRepo repository.ResourceNetworkRepository,
 	rdsPortRepo repository.RDSPortRepository,
 	computeReg registry.ComputeRegistry,
+	publicInterface string,
 ) NetworkService {
 	return &networkService{
 		db:                  db,
@@ -110,6 +112,7 @@ func NewNetworkService(
 		iptablesDriver:      iptablesDriver,
 		routingDriver:       routingDriver,
 		dockerNetworkDriver: dockerNetworkDriver,
+		publicInterface:     publicInterface,
 	}
 }
 

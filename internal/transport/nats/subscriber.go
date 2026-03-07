@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -598,11 +599,17 @@ func (s *Subscriber) Subscribe() error {
 
 		// Step 2.1: Automatically allocate and associate an Elastic IP
 		// This ensures the VM is reachable from the host network immediately.
-		eip, err := s.netService.AutoAssociateEIP(ctx, req.InstanceID, privateIP)
-		if err != nil {
-			l.Warn("Failed to auto-associate EIP during instance prepare — VM will only have private IP", zap.Error(err))
+		// Only for EC2 instances (i- prefix), not RDS containers which use port-based NAT.
+		if strings.HasPrefix(req.InstanceID, "i-") {
+			eip, err := s.netService.AutoAssociateEIP(ctx, req.InstanceID, privateIP)
+			if err != nil {
+				l.Warn("Failed to auto-associate EIP during instance prepare — VM will only have private IP", zap.Error(err))
+			} else {
+				l.Info("Auto-associated EIP", zap.String("public_ip", eip.PublicIP))
+			}
 		} else {
-			l.Info("Auto-associated EIP", zap.String("public_ip", eip.PublicIP))
+			logger.WithContext(ctx).Info("Skipping EIP auto-association for non-EC2 resource",
+				zap.String("instance_id", req.InstanceID))
 		}
 
 		// Step 3: derive gateway from the bridge — gateway is always x.x.x.1

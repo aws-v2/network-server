@@ -86,8 +86,7 @@ func (s *networkService) AssociateEIP(ctx context.Context, eipID, instanceID, pr
 	}
 
 	// 2. Setup host IP alias (so host responds to ARP for this IP)
-	// In a real system, the device would be configurable (e.g. eth0 or a dedicated public interface)
-	if err := s.bridgeDriver.AddIPAlias(eip.PublicIP, "eth0"); err != nil {
+	if err := s.bridgeDriver.AddIPAlias(eip.PublicIP, s.publicInterface); err != nil {
 		l.Error("Failed to add host IP alias", zap.Error(err), zap.String("public_ip", eip.PublicIP))
 		// We proceed, as iptables might still work if the IP is routed to us,
 		// but usually aliasing is needed for local reachability.
@@ -141,7 +140,7 @@ func (s *networkService) DisassociateEIP(ctx context.Context, eipID string) erro
 	}
 
 	// 2. Cleanup host and network rules
-	if err := s.bridgeDriver.RemoveIPAlias(eip.PublicIP, "eth0"); err != nil {
+	if err := s.bridgeDriver.RemoveIPAlias(eip.PublicIP, s.publicInterface); err != nil {
 		l.Error("Failed to remove host IP alias", zap.Error(err), zap.String("public_ip", eip.PublicIP))
 	}
 

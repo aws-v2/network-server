@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	ErrNoAvailablePorts = errors.New("no available public ports in range 5432-6000")
+	ErrNoAvailablePorts = errors.New("no public ports available in pool")
 )
 
 type postgresRDSPortRepository struct {
@@ -23,7 +23,7 @@ func NewRDSPortRepository(db *sqlx.DB) RDSPortRepository {
 	return &postgresRDSPortRepository{db: db}
 }
 
-// Allocate finds the next free port in range 5432-6000 and inserts a new allocation
+// Allocate finds the next free port in range 5433-6000 and inserts a new allocation
 func (r *postgresRDSPortRepository) Allocate(ctx context.Context, tenantID, resourceID, privateIP string, privatePort int, publicIP string) (int, error) {
 	var publicPort int
 
@@ -48,15 +48,13 @@ func (r *postgresRDSPortRepository) Allocate(ctx context.Context, tenantID, reso
 		return 0, fmt.Errorf("failed allocating querying existing ports: %w", err)
 	}
 
-	// 2. Find lowest available port in range 5432-6000
+	// 2. Find lowest available port in range 5433-6000
 	err = tx.GetContext(ctx, &publicPort, `
-		WITH available_ports AS (
-			SELECT generate_series(5432, 6000) AS port
-			EXCEPT
+		SELECT port FROM generate_series(5433, 6000) AS port
+		WHERE port NOT IN (
 			SELECT public_port FROM rds_port_allocations WHERE released_at IS NULL
-			ORDER BY port ASC LIMIT 1
 		)
-		SELECT port FROM available_ports
+		ORDER BY port LIMIT 1
 	`)
 
 	if err == sql.ErrNoRows || publicPort == 0 {

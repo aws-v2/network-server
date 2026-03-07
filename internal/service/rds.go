@@ -4,19 +4,20 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/martin/network-service/pkg/logger"
 	"go.uber.org/zap"
 )
 
 // ExposeRDSContainer allocates a public port and sets up DNAT/SNAT rules
 func (s *networkService) ExposeRDSContainer(ctx context.Context, tenantID, resourceID, privateIP, publicIP string, privatePort int) (int, error) {
+	zap.L().Info(fmt.Sprintf("[RDS-EXPOSE] Exposing %s %s:%d via %s", resourceID, privateIP, privatePort, publicIP))
+
 	// 1. Allocate a port
 	publicPort, err := s.rdsPortRepo.Allocate(ctx, tenantID, resourceID, privateIP, privatePort, publicIP)
 	if err != nil {
 		zap.L().Error("[RDS-EXPOSE] Failed to allocate port", zap.Error(err), zap.String("resource_id", resourceID))
 		return 0, fmt.Errorf("failed to allocate RDS port: %w", err)
 	}
-
-	zap.L().Info("[RDS-EXPOSE] Allocated port", zap.Int("public_port", publicPort), zap.String("resource_id", resourceID))
 
 	// 2. Setup DNAT
 	if err := s.iptablesDriver.SetupRDSDNAT(publicIP, publicPort, privateIP, privatePort); err != nil {
@@ -33,10 +34,7 @@ func (s *networkService) ExposeRDSContainer(ctx context.Context, tenantID, resou
 		return 0, fmt.Errorf("failed to setup RDS SNAT: %w", err)
 	}
 
-	zap.L().Info("[RDS-EXPOSE] Successfully exposed RDS container",
-		zap.String("resource_id", resourceID),
-		zap.Int("public_port", publicPort),
-	)
+	zap.L().Info(fmt.Sprintf("[RDS-EXPOSE] Successfully exposed %s at %s:%d", resourceID, publicIP, publicPort))
 
 	return publicPort, nil
 }
@@ -51,11 +49,9 @@ func (s *networkService) UnexposeRDSContainer(ctx context.Context, resourceID st
 	}
 
 	if alloc == nil {
-		zap.L().Info("[RDS-EXPOSE] No active port allocation found, nothing to unexpose", zap.String("resource_id", resourceID))
+		zap.L().Warn("[RDS-EXPOSE] No active port allocation found, nothing to unexpose", zap.String("resource_id", resourceID))
 		return nil
 	}
-
-	zap.L().Info("[RDS-EXPOSE] Unexposing RDS container", zap.String("resource_id", resourceID), zap.Int("public_port", alloc.PublicPort))
 
 	// 2. Remove NAT rules
 	if err := s.iptablesDriver.RemoveRDSDNAT(alloc.PublicIP, alloc.PublicPort, alloc.PrivateIP, alloc.PrivatePort); err != nil {
@@ -72,7 +68,7 @@ func (s *networkService) UnexposeRDSContainer(ctx context.Context, resourceID st
 		return fmt.Errorf("failed to release RDS port: %w", err)
 	}
 
-	zap.L().Info("[RDS-EXPOSE] Successfully unexposed RDS container", zap.String("resource_id", resourceID))
+	zap.L().Info(fmt.Sprintf("[RDS-EXPOSE] Successfully unexposed %s", resourceID))
 
 	return nil
 }
@@ -80,46 +76,54 @@ func (s *networkService) UnexposeRDSContainer(ctx context.Context, resourceID st
 // ReconcileRDSPorts re-applies DNAT/SNAT rules for all active RDS port allocations.
 // iptables rules are lost on host restart; this is called at startup alongside ReconcileVPCs.
 func (s *networkService) ReconcileRDSPorts(ctx context.Context) error {
-	allocs, err := s.rdsPortRepo.ListActive(ctx)
+	l := logger.WithContext(ctx)
+	l.Info("[RDS-RECONCILE] Starting RDS port rules reconciliation")
+
+	allocations, err := s.rdsPortRepo.ListActive(ctx)
 	if err != nil {
-		zap.L().Error("[RDS-RECONCILE] Failed to list active port allocations", zap.Error(err))
 		return fmt.Errorf("failed to list active RDS port allocations: %w", err)
 	}
 
-	if len(allocs) == 0 {
-		zap.L().Info("[RDS-RECONCILE] No active RDS port allocations to reconcile")
+	if len(allocations) == 0 {
+		l.Info("[RDS-RECONCILE] No active RDS port allocations found")
 		return nil
 	}
 
-	zap.L().Info("[RDS-RECONCILE] Reconciling RDS port rules", zap.Int("count", len(allocs)))
+	successCount := 0
+	for _, alloc := range allocations {
+		// Re-apply DNAT
+		if err := s.iptablesDriver.SetupRDSDNAT(
+			alloc.PublicIP, alloc.PublicPort,
+			alloc.PrivateIP, alloc.PrivatePort,
+		); err != nil {
+			l.Error("[RDS-RECONCILE] Failed to re-apply DNAT rule",
+				zap.String("resource_id", alloc.ResourceID),
+				zap.Error(err))
+			continue
+		}
 
-	var reconciledCount int
-	for _, alloc := range allocs {
-		log := zap.L().With(
+		// Re-apply SNAT
+		if err := s.iptablesDriver.SetupRDSSNAT(
+			alloc.PrivateIP, alloc.PrivatePort,
+			alloc.PublicIP, alloc.PublicPort,
+		); err != nil {
+			l.Error("[RDS-RECONCILE] Failed to re-apply SNAT rule",
+				zap.String("resource_id", alloc.ResourceID),
+				zap.Error(err))
+			continue
+		}
+
+		successCount++
+		l.Info("[RDS-RECONCILE] Re-applied rules",
 			zap.String("resource_id", alloc.ResourceID),
-			zap.String("public_ip", alloc.PublicIP),
-			zap.Int("public_port", alloc.PublicPort),
-			zap.String("private_ip", alloc.PrivateIP),
-			zap.Int("private_port", alloc.PrivatePort),
+			zap.String("public", fmt.Sprintf("%s:%d", alloc.PublicIP, alloc.PublicPort)),
+			zap.String("private", fmt.Sprintf("%s:%d", alloc.PrivateIP, alloc.PrivatePort)),
 		)
-
-		if err := s.iptablesDriver.SetupRDSDNAT(alloc.PublicIP, alloc.PublicPort, alloc.PrivateIP, alloc.PrivatePort); err != nil {
-			log.Error("[RDS-RECONCILE] Failed to re-apply DNAT rule", zap.Error(err))
-			continue
-		}
-
-		if err := s.iptablesDriver.SetupRDSSNAT(alloc.PrivateIP, alloc.PrivatePort, alloc.PublicIP, alloc.PublicPort); err != nil {
-			log.Error("[RDS-RECONCILE] Failed to re-apply SNAT rule", zap.Error(err))
-			continue
-		}
-
-		log.Info("[RDS-RECONCILE] Successfully reconciled RDS port rules")
-		reconciledCount++
 	}
 
-	zap.L().Info("[RDS-RECONCILE] Reconciliation complete",
-		zap.Int("total", len(allocs)),
-		zap.Int("reconciled", reconciledCount),
+	l.Info("[RDS-RECONCILE] Reconciliation complete",
+		zap.Int("total", len(allocations)),
+		zap.Int("success", successCount),
 	)
 	return nil
 }

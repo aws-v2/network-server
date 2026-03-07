@@ -121,6 +121,7 @@ func main() {
 	netService := service.NewNetworkService(
 		db.DB, vpcRepo, subnetRepo, igwRepo, rtRepo, routeRepo, sgRepo, cidrRepo, eipRepo,
 		bridgeDriver, iptablesDriver, routingDriver, dockerNetworkDriver, resourceRepo, netAssignRepo, rdsPortRepo, computeReg,
+		cfg.Server.PublicInterface,
 	)
 
 	// Startup Reconciliation
