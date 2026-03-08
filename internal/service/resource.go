@@ -319,11 +319,28 @@ func (s *networkService) ResolveResourceNetwork(
 		return nil, err
 	}
 
+	// Check for associated Elastic IP
+	// instance_id is derived from resource_arn (arn:aws:ec2:::i-xxxx)
+	instanceID := ""
+	// Assuming resourceARN format is "arn:aws:ec2:::i-xxxx" or similar
+	// A more robust parsing might be needed depending on actual ARN formats
+	if _, err := fmt.Sscanf(resourceARN, "arn:aws:ec2:::%s", &instanceID); err != nil {
+		l.Warn("Failed to parse instance ID from resource ARN", zap.Error(err))
+	}
+
+	if instanceID != "" {
+		if eip, err := s.eipRepo.GetByInstanceID(ctx, instanceID); err == nil && eip != nil {
+			assignment.PublicIP = eip.PublicIP
+		} else if err != nil && err != sql.ErrNoRows {
+			l.Error("Failed to get EIP by instance ID", zap.Error(err), zap.String("instance_id", instanceID))
+		}
+	}
+
 	l.Info("Resolved resource network",
 		zap.String("vpc_id", assignment.VPCID),
 		zap.String("subnet_id", assignment.SubnetID),
 		zap.String("private_ip", assignment.PrivateIP),
-	)
+		zap.String("public_ip", assignment.PublicIP)) // Added public_ip to log
 
 	return assignment, nil
 }

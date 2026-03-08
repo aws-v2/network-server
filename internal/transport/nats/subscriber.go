@@ -19,10 +19,12 @@ const (
 	SubjectUserRegistered = "dev.auth.v1.user.registered"
 	SubjectVPCCreate      = "dev.network.v1.vpc.create"
 	SubjectVPCCreated     = "dev.network.v1.vpc.created"
+	SubjectVPCList        = "dev.network.v1.vpc.list"
 
 	SubjectVPCDefaultGet     = "dev.network.v1.vpc.default.get"
 	SubjectVPCValidate       = "dev.network.v1.vpc.validate"
 	SubjectVPCDefaultResolve = "dev.network.v1.vpc.default.resolve"
+	SubjectVPCReconcile      = "dev.network.v1.vpc.reconcile"
 
 	SubjectResourceAttach = "dev.network.v1.resource.attach"
 	SubjectResourceDetach = "dev.network.v1.resource.detach"
@@ -39,7 +41,14 @@ const (
 	SubjectComputeLifecycle = "dev.compute.v1.instance.lifecycle"
 
 	SubjectInstancePrepare = "dev.network.v1.instance.prepare"
-SubjectInstanceRelease = "dev.network.v1.instance.release"
+	SubjectInstanceRelease = "dev.network.v1.instance.release"
+
+	SubjectEIPAllocate     = "dev.network.v1.eip.allocate"
+	SubjectEIPAssociate    = "dev.network.v1.eip.associate"
+	SubjectEIPDisassociate = "dev.network.v1.eip.disassociate"
+
+	SubjectRDSExpose   = "dev.network.v1.rds.expose"
+	SubjectRDSUnexpose = "dev.network.v1.rds.unexpose"
 )
 
 type Subscriber struct {
@@ -153,6 +162,41 @@ func (s *Subscriber) Subscribe() error {
 
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to %s: %w", SubjectVPCCreate, err)
+	}
+
+	// 2b. List VPCs (Request-Reply)
+	_, err = s.nc.Subscribe(SubjectVPCList, func(msg *nats.Msg) {
+		var req domain.ListVPCsRequest
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
+
+		ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
+		l := logger.WithContext(ctx)
+		l.Info("Listing VPCs", zap.String("tenant_id", req.TenantID))
+
+		vpcs, err := s.netService.ListVPCs(ctx, req.TenantID)
+		resp := domain.ListVPCsResponse{
+			CorrelationID: req.CorrelationID,
+			TenantID:      req.TenantID,
+		}
+		
+		if vpcs == nil {
+			resp.VPCs = []domain.VPC{}
+		} else {
+			resp.VPCs = vpcs
+		}
+
+		if err != nil {
+			resp.Error = err.Error()
+			l.Error("Failed to list VPCs", zap.Error(err))
+		}
+
+		data, _ := json.Marshal(resp)
+		s.nc.Publish(msg.Reply, data)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", SubjectVPCList, err)
 	}
 
 	// 3. Resolve Default VPC (Request-Reply)
@@ -309,6 +353,7 @@ func (s *Subscriber) Subscribe() error {
 			resp.VPCID = assignment.VPCID
 			resp.SubnetID = assignment.SubnetID
 			resp.PrivateIP = assignment.PrivateIP
+			resp.PublicIP = assignment.PublicIP
 		}
 
 		data, _ := json.Marshal(resp)
@@ -535,156 +580,353 @@ func (s *Subscriber) Subscribe() error {
 		s.nc.Publish(msg.Reply, data)
 	})
 
+	// 16. Prepare Instance Network — allocates IP from subnet and returns it to EC2
+	_, err = s.nc.Subscribe(SubjectInstancePrepare, func(msg *nats.Msg) {
+		var req struct {
+			CorrelationID string `json:"correlation_id"`
+			TenantID      string `json:"tenant_id"`
+			InstanceID    string `json:"instance_id"`
+			VPCID         string `json:"vpc_id"`
+		}
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
 
+		ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
+		l := logger.WithContext(ctx).With(
+			zap.String("tenant_id", req.TenantID),
+			zap.String("instance_id", req.InstanceID),
+			zap.String("vpc_id", req.VPCID),
+		)
+		l.Info("Received instance network prepare request")
 
-// 16. Prepare Instance Network — allocates IP from subnet and returns it to EC2
-_, err = s.nc.Subscribe(SubjectInstancePrepare, func(msg *nats.Msg) {
-    var req struct {
-        CorrelationID string `json:"correlation_id"`
-        TenantID      string `json:"tenant_id"`
-        InstanceID    string `json:"instance_id"`
-        VPCID         string `json:"vpc_id"`
-    }
-    if err := json.Unmarshal(msg.Data, &req); err != nil {
-        return
-    }
+		// Build the resource ARN for this instance
+		resourceARN := fmt.Sprintf("arn:aws:ec2:::%s", req.InstanceID)
 
-    ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
-    l := logger.WithContext(ctx).With(
-        zap.String("tenant_id", req.TenantID),
-        zap.String("instance_id", req.InstanceID),
-        zap.String("vpc_id", req.VPCID),
-    )
-    l.Info("Received instance network prepare request")
+		// Step 1: resolve the VPC subnet and bridge
+		var vpcID, subnetID, bridgeName string
+		if req.VPCID != "" {
+			vpcID, subnetID, bridgeName, err = s.netService.ResolveVPCNetwork(ctx, req.TenantID, req.VPCID)
+		} else {
+			vpcID, subnetID, bridgeName, err = s.netService.ResolveDefaultNetwork(ctx, req.TenantID)
+		}
 
-    // Build the resource ARN for this instance
-    resourceARN := fmt.Sprintf("arn:aws:ec2:::%s", req.InstanceID)
+		if err != nil {
+			l.Error("Failed to resolve network for instance prepare", zap.Error(err))
+			resp, _ := json.Marshal(map[string]interface{}{
+				"correlation_id": req.CorrelationID,
+				"success":        false,
+				"error":          err.Error(),
+			})
+			s.nc.Publish(msg.Reply, resp)
+			return
+		}
 
-    // Step 1: resolve the default VPC subnet and bridge
-    vpcID, subnetID, bridgeName, err := s.netService.ResolveDefaultNetwork(ctx, req.TenantID)
-    if err != nil {
-        l.Error("Failed to resolve default network for instance prepare", zap.Error(err))
-        resp, _ := json.Marshal(map[string]interface{}{
-            "correlation_id": req.CorrelationID,
-            "success":        false,
-            "error":          err.Error(),
-        })
-        s.nc.Publish(msg.Reply, resp)
-        return
-    }
+		// Step 2: attach resource to subnet — this allocates the IP from the CIDR pool
+		privateIP, err := s.netService.AttachResourceToSubnet(ctx, req.TenantID, resourceARN, vpcID, subnetID)
+		if err != nil {
+			l.Error("Failed to allocate IP for instance", zap.Error(err))
+			resp, _ := json.Marshal(map[string]interface{}{
+				"correlation_id": req.CorrelationID,
+				"success":        false,
+				"error":          err.Error(),
+			})
+			s.nc.Publish(msg.Reply, resp)
+			return
+		}
 
-    // Use the requested VPC if provided, otherwise use default
-    if req.VPCID != "" {
-        vpcID = req.VPCID
-    }
+		// Step 2.1: Automatically allocate and associate an Elastic IP
+		// This ensures the VM is reachable from the host network immediately.
+		// Only for EC2 instances (i- prefix), not RDS containers which use port-based NAT.
+		if strings.HasPrefix(req.InstanceID, "i-") {
+			eip, err := s.netService.AutoAssociateEIP(ctx, req.InstanceID, privateIP)
+			if err != nil {
+				l.Warn("Failed to auto-associate EIP during instance prepare — VM will only have private IP", zap.Error(err))
+			} else {
+				l.Info("Auto-associated EIP", zap.String("public_ip", eip.PublicIP))
+			}
+		} else {
+			logger.WithContext(ctx).Info("Skipping EIP auto-association for non-EC2 resource",
+				zap.String("instance_id", req.InstanceID))
+		}
 
-    // Step 2: attach resource to subnet — this allocates the IP from the CIDR pool
-    privateIP, err := s.netService.AttachResourceToSubnet(ctx, req.TenantID, resourceARN, vpcID, subnetID)
-    if err != nil {
-        l.Error("Failed to allocate IP for instance", zap.Error(err))
-        resp, _ := json.Marshal(map[string]interface{}{
-            "correlation_id": req.CorrelationID,
-            "success":        false,
-            "error":          err.Error(),
-        })
-        s.nc.Publish(msg.Reply, resp)
-        return
-    }
+		// Step 3: derive gateway from the bridge — gateway is always x.x.x.1
+		// The bridge IP is assigned as x.x.x.1/24 during VPC provisioning
+		gateway := service.DeriveGateway(privateIP)
 
-    // Step 3: derive gateway from the bridge — gateway is always x.x.x.1
-    // The bridge IP is assigned as x.x.x.1/24 during VPC provisioning
-    gateway := deriveGateway(privateIP)
+		l.Info("Instance network prepared",
+			zap.String("private_ip", privateIP),
+			zap.String("gateway", gateway),
+			zap.String("bridge", bridgeName),
+		)
 
-    l.Info("Instance network prepared",
-        zap.String("private_ip", privateIP),
-        zap.String("gateway", gateway),
-        zap.String("bridge", bridgeName),
-    )
+		resp, _ := json.Marshal(map[string]interface{}{
+			"correlation_id": req.CorrelationID,
+			"success":        true,
+			"private_ip":     privateIP,
+			"gateway":        gateway,
+			"bridge_name":    bridgeName,
+		})
+		s.nc.Publish(msg.Reply, resp)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", SubjectInstancePrepare, err)
+	}
 
-    resp, _ := json.Marshal(map[string]interface{}{
-        "correlation_id": req.CorrelationID,
-        "success":        true,
-        "private_ip":     privateIP,
-        "gateway":        gateway,
-        "bridge_name":    bridgeName,
-    })
-    s.nc.Publish(msg.Reply, resp)
-})
-if err != nil {
-    return fmt.Errorf("failed to subscribe to %s: %w", SubjectInstancePrepare, err)
-}
+	// 17. Release Instance Network — releases the IP back to the subnet pool
+	_, err = s.nc.Subscribe(SubjectInstanceRelease, func(msg *nats.Msg) {
+		var req struct {
+			CorrelationID string `json:"correlation_id"`
+			TenantID      string `json:"tenant_id"`
+			InstanceID    string `json:"instance_id"`
+			VPCID         string `json:"vpc_id"`
+		}
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
 
-// 17. Release Instance Network — releases the IP back to the subnet pool
-_, err = s.nc.Subscribe(SubjectInstanceRelease, func(msg *nats.Msg) {
-    var req struct {
-        CorrelationID string `json:"correlation_id"`
-        TenantID      string `json:"tenant_id"`
-        InstanceID    string `json:"instance_id"`
-        VPCID         string `json:"vpc_id"`
-    }
-    if err := json.Unmarshal(msg.Data, &req); err != nil {
-        return
-    }
+		ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
+		l := logger.WithContext(ctx).With(
+			zap.String("tenant_id", req.TenantID),
+			zap.String("instance_id", req.InstanceID),
+		)
+		l.Info("Received instance network release request")
 
-    ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
-    l := logger.WithContext(ctx).With(
-        zap.String("tenant_id", req.TenantID),
-        zap.String("instance_id", req.InstanceID),
-    )
-    l.Info("Received instance network release request")
+		resourceARN := fmt.Sprintf("arn:aws:ec2:::%s", req.InstanceID)
 
-    resourceARN := fmt.Sprintf("arn:aws:ec2:::%s", req.InstanceID)
+		err := s.netService.DetachResourceFromNetwork(ctx, resourceARN)
 
-    err := s.netService.DetachResourceFromNetwork(ctx, resourceARN)
+		status := "success"
+		errMsg := ""
+		if err != nil {
+			l.Error("Failed to release instance network", zap.Error(err))
+			status = "error"
+			errMsg = err.Error()
+		} else {
+			l.Info("Instance network released successfully")
+		}
 
-    status := "success"
-    errMsg := ""
-    if err != nil {
-        l.Error("Failed to release instance network", zap.Error(err))
-        status = "error"
-        errMsg = err.Error()
-    } else {
-        l.Info("Instance network released successfully")
-    }
-
-    resp, _ := json.Marshal(map[string]interface{}{
-        "correlation_id": req.CorrelationID,
-        "status":         status,
-        "error":          errMsg,
-    })
-    s.nc.Publish(msg.Reply, resp)
-})
-if err != nil {
-    return fmt.Errorf("failed to subscribe to %s: %w", SubjectInstanceRelease, err)
-}
-
-
-
-
-
-
-
-
-
-
+		resp, _ := json.Marshal(map[string]interface{}{
+			"correlation_id": req.CorrelationID,
+			"status":         status,
+			"error":          errMsg,
+		})
+		s.nc.Publish(msg.Reply, resp)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", SubjectInstanceRelease, err)
+	}
 
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to compute.route: %w", err)
 	}
 
+	// 18. Allocate EIP (Request-Reply)
+	_, err = s.nc.Subscribe(SubjectEIPAllocate, func(msg *nats.Msg) {
+		var req domain.AllocateEIPRequest
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
+
+		ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
+		l := logger.WithContext(ctx)
+		l.Info("Received EIP allocation request")
+
+		eip, err := s.netService.AllocateEIP(ctx)
+		resp := domain.AllocateEIPResponse{
+			CorrelationID: req.CorrelationID,
+			Success:       err == nil,
+		}
+
+		if err == nil {
+			resp.EIPID = eip.ID
+			resp.PublicIP = eip.PublicIP
+			l.Info("Allocated EIP", zap.String("public_ip", eip.PublicIP))
+		} else {
+			resp.Error = err.Error()
+			l.Error("Failed to allocate EIP", zap.Error(err))
+		}
+
+		data, _ := json.Marshal(resp)
+		s.nc.Publish(msg.Reply, data)
+	})
+
+	// 19. Associate EIP (Request-Reply)
+	_, err = s.nc.Subscribe(SubjectEIPAssociate, func(msg *nats.Msg) {
+		var req domain.AssociateEIPRequest
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
+
+		ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
+		l := logger.WithContext(ctx).With(zap.String("eip_id", req.EIPID), zap.String("instance_id", req.InstanceID))
+		l.Info("Received EIP association request")
+
+		// Step 1: Resolve instance private IP
+		resourceARN := fmt.Sprintf("arn:aws:ec2:::%s", req.InstanceID)
+		assignment, err := s.netService.ResolveResourceNetwork(ctx, resourceARN)
+		if err != nil {
+			l.Error("Failed to resolve instance network for EIP association", zap.Error(err))
+			resp, _ := json.Marshal(domain.AssociateEIPResponse{
+				CorrelationID: req.CorrelationID,
+				Success:       false,
+				Error:         fmt.Sprintf("failed to resolve instance network: %v", err),
+			})
+			s.nc.Publish(msg.Reply, resp)
+			return
+		}
+
+		// Step 2: Associate
+		err = s.netService.AssociateEIP(ctx, req.EIPID, req.InstanceID, assignment.PrivateIP)
+		resp := domain.AssociateEIPResponse{
+			CorrelationID: req.CorrelationID,
+			Success:       err == nil,
+		}
+		if err != nil {
+			resp.Error = err.Error()
+			l.Error("Failed to associate EIP", zap.Error(err))
+		}
+
+		data, _ := json.Marshal(resp)
+		s.nc.Publish(msg.Reply, data)
+	})
+
+	// 20. Disassociate EIP (Request-Reply)
+	_, err = s.nc.Subscribe(SubjectEIPDisassociate, func(msg *nats.Msg) {
+		var req domain.DisassociateEIPRequest
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
+
+		ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
+		l := logger.WithContext(ctx).With(zap.String("eip_id", req.EIPID))
+		l.Info("Received EIP disassociation request")
+
+		err := s.netService.DisassociateEIP(ctx, req.EIPID)
+		resp := domain.DisassociateEIPResponse{
+			CorrelationID: req.CorrelationID,
+			Success:       err == nil,
+		}
+		if err != nil {
+			resp.Error = err.Error()
+			l.Error("Failed to disassociate EIP", zap.Error(err))
+		}
+
+		data, _ := json.Marshal(resp)
+		s.nc.Publish(msg.Reply, data)
+	})
+
+	// 20b. Reconcile VPCs (Request-Reply)
+	_, err = s.nc.Subscribe(SubjectVPCReconcile, func(msg *nats.Msg) {
+		var req domain.ReconcileVPCsRequest
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
+
+		ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
+		l := logger.WithContext(ctx)
+		l.Info("Received VPC reconciliation request")
+
+		err := s.netService.ReconcileVPCs(ctx)
+		resp := domain.ReconcileVPCsResponse{
+			CorrelationID: req.CorrelationID,
+			Success:       err == nil,
+		}
+
+		if err == nil {
+			resp.Message = "VPC reconciliation completed successfully"
+		} else {
+			resp.Error = err.Error()
+			l.Error("Failed to reconcile VPCs", zap.Error(err))
+		}
+
+		data, _ := json.Marshal(resp)
+		s.nc.Publish(msg.Reply, data)
+	})
+
+	// 21. Expose RDS Container (Request-Reply)
+	_, err = s.nc.Subscribe(SubjectRDSExpose, func(msg *nats.Msg) {
+		var req struct {
+			CorrelationID string `json:"correlation_id"`
+			TenantID      string `json:"tenant_id"`
+			ResourceID    string `json:"resource_id"`
+			PrivateIP     string `json:"private_ip"`
+			PrivatePort   int    `json:"private_port"`
+			PublicIP      string `json:"public_ip"`
+		}
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
+
+		ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
+		l := logger.WithContext(ctx).With(
+			zap.String("tenant_id", req.TenantID),
+			zap.String("resource_id", req.ResourceID),
+			zap.String("private_ip", req.PrivateIP),
+			zap.Int("private_port", req.PrivatePort),
+			zap.String("public_ip", req.PublicIP),
+		)
+		l.Info("[RDS-EXPOSE] Received expose request")
+
+		publicPort, err := s.netService.ExposeRDSContainer(ctx, req.TenantID, req.ResourceID, req.PrivateIP, req.PublicIP, req.PrivatePort)
+
+		resp := struct {
+			Success    bool   `json:"success"`
+			PublicPort int    `json:"public_port"`
+			Error      string `json:"error"`
+		}{
+			Success:    err == nil,
+			PublicPort: publicPort,
+		}
+		if err != nil {
+			resp.Error = err.Error()
+			l.Error("[RDS-EXPOSE] Failed to expose RDS container", zap.Error(err))
+		} else {
+			l.Info("[RDS-EXPOSE] Successfully exposed RDS container", zap.Int("public_port", publicPort))
+		}
+
+		data, _ := json.Marshal(resp)
+		s.nc.Publish(msg.Reply, data)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", SubjectRDSExpose, err)
+	}
+
+	// 22. Unexpose RDS Container (Request-Reply)
+	_, err = s.nc.Subscribe(SubjectRDSUnexpose, func(msg *nats.Msg) {
+		var req struct {
+			CorrelationID string `json:"correlation_id"`
+			ResourceID    string `json:"resource_id"`
+		}
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
+
+		ctx := context.WithValue(context.Background(), logger.CorrelationIDKey, req.CorrelationID)
+		l := logger.WithContext(ctx).With(zap.String("resource_id", req.ResourceID))
+		l.Info("[RDS-EXPOSE] Received unexpose request")
+
+		err := s.netService.UnexposeRDSContainer(ctx, req.ResourceID)
+
+		resp := struct {
+			Success bool   `json:"success"`
+			Error   string `json:"error"`
+		}{
+			Success: err == nil,
+		}
+		if err != nil {
+			resp.Error = err.Error()
+			l.Error("[RDS-EXPOSE] Failed to unexpose RDS container", zap.Error(err))
+		} else {
+			l.Info("[RDS-EXPOSE] Successfully unexposed RDS container")
+		}
+
+		data, _ := json.Marshal(resp)
+		s.nc.Publish(msg.Reply, data)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", SubjectRDSUnexpose, err)
+	}
+
 	return nil
-}
-
-
-
-
-// deriveGateway returns the gateway IP for a given private IP.
-// By convention, VPC subnets are provisioned with the gateway at x.x.x.1,
-// so 10.0.1.5 → gateway is 10.0.1.1
-func deriveGateway(privateIP string) string {
-    parts := strings.Split(privateIP, ".")
-    if len(parts) != 4 {
-        return ""
-    }
-    return fmt.Sprintf("%s.%s.%s.1", parts[0], parts[1], parts[2])
 }

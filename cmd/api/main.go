@@ -108,17 +108,20 @@ func main() {
 	eipRepo := repository.NewElasticIPRepository(db.DB)
 	resourceRepo := repository.NewResourceVPCRepository(db.DB)
 	netAssignRepo := repository.NewResourceNetworkRepository(db.DB)
+	rdsPortRepo := repository.NewRDSPortRepository(db.DB)
 	computeReg := registry.NewComputeRegistry()
 
 	// 5.5 Setup Drivers
 	bridgeDriver := driver.NewBridgeDriver()
 	iptablesDriver := driver.NewIptablesDriver()
 	routingDriver := driver.NewRoutingDriver()
+	dockerNetworkDriver := driver.NewDockerNetworkDriver()
 
 	// 6. Setup Services
 	netService := service.NewNetworkService(
 		db.DB, vpcRepo, subnetRepo, igwRepo, rtRepo, routeRepo, sgRepo, cidrRepo, eipRepo,
-		bridgeDriver, iptablesDriver, routingDriver, resourceRepo, netAssignRepo, computeReg,
+		bridgeDriver, iptablesDriver, routingDriver, dockerNetworkDriver, resourceRepo, netAssignRepo, rdsPortRepo, computeReg,
+		cfg.Server.PublicInterface,
 	)
 
 	// Startup Reconciliation
@@ -126,6 +129,11 @@ func main() {
 		zap.L().Info("Triggering background VPC reconciliation")
 		if err := netService.ReconcileVPCs(context.Background()); err != nil {
 			zap.L().Error("Startup reconciliation failed", zap.Error(err))
+		}
+
+		zap.L().Info("Triggering background RDS port reconciliation")
+		if err := netService.ReconcileRDSPorts(context.Background()); err != nil {
+			zap.L().Error("RDS port reconciliation failed", zap.Error(err))
 		}
 	}()
 

@@ -3,6 +3,7 @@ package driver
 import (
 	"fmt"
 	"os/exec"
+	"strings"
 
 	"go.uber.org/zap"
 )
@@ -12,6 +13,9 @@ type BridgeDriver interface {
 	DeleteBridge(name string) error
 	Exists(name string) (bool, error)
 	AssignIP(name, cidr string) error
+	BringUp(name string) error
+	AddIPAlias(ip, device string) error
+	RemoveIPAlias(ip, device string) error
 }
 
 type linuxBridgeDriver struct{}
@@ -75,10 +79,44 @@ func (d *linuxBridgeDriver) AssignIP(name, cidr string) error {
 	// ip addr add <cidr> dev <name>
 	cmd := exec.Command("ip", "addr", "add", cidr, "dev", name)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		// Ignore if the address already exists (exit code 2 usually, output contains "File exists")
-		// Wait, sometimes it's better to just return an error but maybe log it.
-		// Actually, let's just return the error if it fails.
+		// Ignore if the address is already assigned
+		if strings.Contains(string(out), "File exists") {
+			return nil
+		}
 		return fmt.Errorf("failed to assign IP to bridge %s: %w (output: %s)", name, err, string(out))
+	}
+
+	return nil
+}
+
+func (d *linuxBridgeDriver) BringUp(name string) error {
+	zap.L().Info("Bringing up interface", zap.String("device", name))
+	cmd := exec.Command("ip", "link", "set", "dev", name, "up")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to set interface %s up: %w (output: %s)", name, err, string(out))
+	}
+	return nil
+}
+
+func (d *linuxBridgeDriver) AddIPAlias(ip, device string) error {
+	zap.L().Info("Adding IP alias to device", zap.String("ip", ip), zap.String("device", device))
+
+	// ip addr add <ip>/32 dev <device>
+	cmd := exec.Command("ip", "addr", "add", ip+"/32", "dev", device)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to add IP alias %s to %s: %w (output: %s)", ip, device, err, string(out))
+	}
+
+	return nil
+}
+
+func (d *linuxBridgeDriver) RemoveIPAlias(ip, device string) error {
+	zap.L().Info("Removing IP alias from device", zap.String("ip", ip), zap.String("device", device))
+
+	// ip addr del <ip>/32 dev <device>
+	cmd := exec.Command("ip", "addr", "del", ip+"/32", "dev", device)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to remove IP alias %s from %s: %w (output: %s)", ip, device, err, string(out))
 	}
 
 	return nil

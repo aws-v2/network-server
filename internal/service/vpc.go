@@ -51,6 +51,19 @@ func (s *networkService) CreateVPC(ctx context.Context, tenantID, vpcName string
 	return s.provisionVPCInternal(ctx, tenantID, vpcName, false)
 }
 
+func (s *networkService) ListVPCs(ctx context.Context, tenantID string) ([]domain.VPC, error) {
+	l := logger.WithContext(ctx)
+	l.Info("Listing VPCs", zap.String("tenant_id", tenantID))
+
+	vpcs, err := s.vpcRepo.ListByTenant(ctx, tenantID)
+	if err != nil {
+		l.Error("Failed to list VPCs", zap.Error(err), zap.String("tenant_id", tenantID))
+		return nil, fmt.Errorf("failed to list VPCs: %w", err)
+	}
+
+	return vpcs, nil
+}
+
 func (s *networkService) provisionVPCInternal(ctx context.Context, tenantID, vpcName string, isDefault bool) (*domain.VPC, error) {
 	l := logger.WithContext(ctx)
 
@@ -208,11 +221,40 @@ func (s *networkService) provisionVPCInternal(ctx context.Context, tenantID, vpc
 		return nil, fmt.Errorf("failed to create bridge: %w", err)
 	}
 
-	gatewayCIDR := fmt.Sprintf("%s.1.1/24", basePrefix)
-	if err := s.bridgeDriver.AssignIP(bridgeName, gatewayCIDR); err != nil {
-		l.Error("OS provisioning failed: bridge IP assignment error", zap.Error(err), zap.String("vpc_id", vpcID))
-		s.vpcRepo.UpdateStatus(ctx, vpcID, domain.VPCStatusError)
-		return nil, fmt.Errorf("failed to assign IP to bridge: %w", err)
+	// 13.2 Register bridge with Docker so containers can attach to it
+	// We use the public subnet CIDR for this. The gateway is the first IP in that subnet.
+	gatewayIP := DeriveGateway(publicSubnet.CIDRBlock)
+	if gatewayIP != "" {
+		if err := s.dockerNetworkDriver.RegisterBridge(bridgeName, publicSubnet.CIDRBlock, gatewayIP); err != nil {
+			l.Warn("Failed to register bridge with Docker", zap.Error(err), zap.String("bridge", bridgeName))
+			// non-fatal for EC2 VMs, but might cause issues for RDS containers later
+		}
+	} else {
+		l.Error("Failed to derive gateway IP for Docker network registration", zap.String("cidr", publicSubnet.CIDRBlock))
+	}
+
+	// ALWAYS ensure the bridge is UP.
+	if err := s.bridgeDriver.BringUp(bridgeName); err != nil {
+		l.Warn("Failed to bring up bridge during provisioning", zap.Error(err), zap.String("bridge", bridgeName))
+	}
+
+	// Assign gateway IPs for ALL subnets in this VPC.
+	// Each subnet x.x.y.0/24 gets a gateway at x.x.y.1 on the bridge.
+	subnets, err := s.subnetRepo.ListByVPC(ctx, vpcID)
+	if err != nil {
+		l.Error("OS provisioning failed: could not list subnets for IP assignment", zap.Error(err), zap.String("vpc_id", vpcID))
+	} else {
+		for _, sn := range subnets {
+			gateway := DeriveGateway(sn.CIDRBlock)
+			if gateway != "" {
+				gatewayCIDR := fmt.Sprintf("%s/24", gateway)
+				if err := s.bridgeDriver.AssignIP(bridgeName, gatewayCIDR); err != nil {
+					l.Error("OS provisioning: gateway IP assignment error", zap.Error(err), zap.String("subnet", sn.ID), zap.String("ip", gatewayCIDR))
+				} else {
+					l.Info("Gateway IP assigned to bridge", zap.String("subnet", sn.ID), zap.String("cidr", gatewayCIDR))
+				}
+			}
+		}
 	}
 
 	// 13.2 Setup MASQUERADE
@@ -264,7 +306,7 @@ func (s *networkService) ValidateVPC(ctx context.Context, tenantID, vpcID string
 	}
 
 	if vpc.Status != domain.VPCStatusActive {
-		return false, vpc.Status, fmt.Sprintf("VPC is in %s status", vpc.Status), nil
+		return false, vpc.Status, fmt.Sprintf("VPC is in %s status (likely due to missing bridge or permissions)", vpc.Status), nil
 	}
 
 	return true, vpc.Status, "", nil
@@ -285,11 +327,34 @@ func (s *networkService) ResolveDefaultNetwork(ctx context.Context, tenantID str
 		return "", "", "", fmt.Errorf("failed to get default VPC: %w", err)
 	}
 
+	return s.ResolveVPCNetwork(ctx, tenantID, vpc.ID)
+}
+
+func (s *networkService) ResolveVPCNetwork(ctx context.Context, tenantID, vpcID string) (string, string, string, error) {
+	l := logger.WithContext(ctx).With(zap.String("tenant_id", tenantID), zap.String("vpc_id", vpcID))
+	l.Info("Resolving network for VPC")
+
+	// 1. Get VPC
+	vpc, err := s.vpcRepo.GetByID(ctx, vpcID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			l.Warn("VPC not found", zap.String("vpc_id", vpcID))
+			return "", "", "", fmt.Errorf("VPC not found: %s", vpcID)
+		}
+		l.Error("Failed to get VPC", zap.Error(err))
+		return "", "", "", fmt.Errorf("failed to get VPC: %w", err)
+	}
+
+	if vpc.TenantID != tenantID {
+		l.Warn("VPC ownership mismatch", zap.String("expected_tenant", tenantID), zap.String("actual_tenant", vpc.TenantID))
+		return "", "", "", fmt.Errorf("VPC %s does not belong to tenant %s", vpcID, tenantID)
+	}
+
 	// 2. Find public subnet in that VPC
 	subnets, err := s.subnetRepo.ListByVPC(ctx, vpc.ID)
 	if err != nil {
 		l.Error("Failed to list subnets for VPC", zap.Error(err), zap.String("vpc_id", vpc.ID))
-		return "", "", "", fmt.Errorf("failed to list subnets for default VPC: %w", err)
+		return "", "", "", fmt.Errorf("failed to list subnets for VPC: %w", err)
 	}
 
 	var defaultSubnetID string
@@ -311,10 +376,10 @@ func (s *networkService) ResolveDefaultNetwork(ctx context.Context, tenantID str
 
 	if defaultSubnetID == "" {
 		l.Warn("No subnets found in VPC", zap.String("vpc_id", vpc.ID))
-		return "", "", "", fmt.Errorf("no subnets found in default VPC %s", vpc.ID)
+		return "", "", "", fmt.Errorf("no subnets found in VPC %s", vpc.ID)
 	}
 
-	l.Info("Resolved default network",
+	l.Info("Resolved network for VPC",
 		zap.String("vpc_id", vpc.ID),
 		zap.String("subnet_id", defaultSubnetID))
 

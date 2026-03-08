@@ -11,6 +11,24 @@ import (
 	"go.uber.org/zap"
 )
 
+func (s *networkService) AutoAssociateEIP(ctx context.Context, instanceID, privateIP string) (*domain.ElasticIP, error) {
+	l := logger.WithContext(ctx).With(zap.String("instance_id", instanceID), zap.String("private_ip", privateIP))
+	l.Info("Auto-associating EIP for instance")
+
+	// 1. Allocate
+	eip, err := s.AllocateEIP(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate EIP for auto-association: %w", err)
+	}
+
+	// 2. Associate
+	if err := s.AssociateEIP(ctx, eip.ID, instanceID, privateIP); err != nil {
+		return nil, fmt.Errorf("failed to associate EIP for auto-association: %w", err)
+	}
+
+	return eip, nil
+}
+
 func (s *networkService) AllocateEIP(ctx context.Context) (*domain.ElasticIP, error) {
 	eipID := uuid.New().String()
 	// In a real system, we'd pull from a pool. For now, we'll generate a random public IP for simulation.
@@ -67,7 +85,14 @@ func (s *networkService) AssociateEIP(ctx context.Context, eipID, instanceID, pr
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	// 2. Setup iptables rules
+	// 2. Setup host IP alias (so host responds to ARP for this IP)
+	if err := s.bridgeDriver.AddIPAlias(eip.PublicIP, s.publicInterface); err != nil {
+		l.Error("Failed to add host IP alias", zap.Error(err), zap.String("public_ip", eip.PublicIP))
+		// We proceed, as iptables might still work if the IP is routed to us,
+		// but usually aliasing is needed for local reachability.
+	}
+
+	// 3. Setup iptables rules
 	if err := s.iptablesDriver.SetupDNAT(eip.PublicIP, privateIP); err != nil {
 		l.Error("Failed to setup DNAT", zap.Error(err), zap.String("public_ip", eip.PublicIP))
 	}
@@ -114,7 +139,11 @@ func (s *networkService) DisassociateEIP(ctx context.Context, eipID string) erro
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	// 2. Remove iptables rules using the stored private_ip
+	// 2. Cleanup host and network rules
+	if err := s.bridgeDriver.RemoveIPAlias(eip.PublicIP, s.publicInterface); err != nil {
+		l.Error("Failed to remove host IP alias", zap.Error(err), zap.String("public_ip", eip.PublicIP))
+	}
+
 	if oldPrivateIP != "" {
 		if err := s.iptablesDriver.RemoveDNAT(eip.PublicIP, oldPrivateIP); err != nil {
 			l.Error("Failed to remove DNAT", zap.Error(err), zap.String("public_ip", eip.PublicIP))

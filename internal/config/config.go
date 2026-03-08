@@ -42,9 +42,10 @@ type NATSConfig struct {
 }
 
 type ServerConfig struct {
-	Port        string
-	ServiceName string
-	HTTPPort    int
+	Port            string
+	ServiceName     string
+	HTTPPort        int
+	PublicInterface string
 }
 
 func Load() (*Config, error) {
@@ -67,6 +68,10 @@ func Load() (*Config, error) {
 			URL:      getEnv("NATS_URL", getEnv("DEV_NATS_URL", "nats://auth-server:auth-secret@localhost:4222")),
 			User:     getEnv("NATS_USER", ""),
 			Password: getEnv("NATS_PASSWORD", ""),
+		},
+		Server: ServerConfig{
+			HTTPPort:        getEnvInt("HTTP_PORT", 8081),
+			PublicInterface: getEnv("PUBLIC_INTERFACE", "eth0"),
 		},
 		Profile: getEnv("APP_PROFILE", "DEV"),
 	}
