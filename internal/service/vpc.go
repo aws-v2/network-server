@@ -28,7 +28,7 @@ func (s *networkService) CreateDefaultVPC(ctx context.Context, tenantID, tenantN
 		return existingDefaultVPC, nil
 	}
 
-	return s.provisionVPCInternal(ctx, tenantID, fmt.Sprintf("%s-vpc", tenantName), true)
+	return s.provisionVPCInternal(ctx, tenantID, fmt.Sprintf("%s-default-vpc", tenantName), true)
 }
 
 func (s *networkService) CreateVPC(ctx context.Context, tenantID, vpcName string) (*domain.VPC, error) {

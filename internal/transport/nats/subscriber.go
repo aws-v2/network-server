@@ -99,6 +99,13 @@ func (s *Subscriber) Subscribe() error {
 			return
 		}
 
+
+
+
+
+
+		l.Info("Successfully processed user registered event----------", zap.String("tenant_id", event.TenantID))
+		// l.Info("Successfully processed user registered event", zap.String("tenant_id", event.TenantID))
 		l.Info("Successfully processed user registered event", zap.String("tenant_id", event.TenantID))
 	})
 
