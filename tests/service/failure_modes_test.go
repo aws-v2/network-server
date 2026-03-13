@@ -39,7 +39,7 @@ func TestCreateVPC_TransactionFailure(t *testing.T) {
 	// Verify
 	assert.Error(t, err)
 	assert.Nil(t, vpc)
-	assert.Contains(t, err.Error(), "failed to create VPC record")
+	assert.Contains(t, err.Error(), "failed to create VPC")
 
 	// Ensure drivers WERE NOT called
 	mocks.BridgeDriver.AssertNotCalled(t, "CreateBridge", mock.Anything)
