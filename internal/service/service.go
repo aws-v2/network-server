@@ -117,14 +117,3 @@ func NewNetworkService(
 		publicInterface:     publicInterface,
 	}
 }
-
-// DeriveGateway returns the gateway IP for a given private IP.
-// By convention, VPC subnets are provisioned with the gateway at x.x.x.1,
-// so 10.0.1.5 → gateway is 10.0.1.1
-// func DeriveGateway(privateIP string) string {
-// 	parts := strings.Split(privateIP, ".")
-// 	if len(parts) != 4 {
-// 		return ""
-// 	}
-// 	return fmt.Sprintf("%s.%s.%s.1", parts[0], parts[1], parts[2])
-// }
