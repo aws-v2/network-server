@@ -25,7 +25,7 @@ jobs:
       with:
         context: .
         push: true
-        tags: qarani/s3-server:latest
+        tags: qarani/network-server:latest
 
     - name: Wait for Docker Hub propagation
       run: sleep 5
