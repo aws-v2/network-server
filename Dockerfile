@@ -32,7 +32,7 @@ COPY --from=builder /app/network-service .
 COPY --from=builder /app/internal/infrastructure/migrations ./internal/infrastructure/migrations
 
 # Expose the port
-EXPOSE 8086
+EXPOSE 8084
 
 # Run the binary
 CMD ["./network-service"]
