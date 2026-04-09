@@ -47,8 +47,8 @@ type MockIptablesDriver struct {
 	mock.Mock
 }
 
-func (m *MockIptablesDriver) SetupMasquerade(cidr string) error {
-	args := m.Called(cidr)
+func (m *MockIptablesDriver) SetupMasquerade(cidr string, bridgeName string) error {
+	args := m.Called(cidr, bridgeName)
 	return args.Error(0)
 }
 

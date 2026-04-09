@@ -257,8 +257,8 @@ func (s *networkService) provisionVPCInternal(ctx context.Context, tenantID, vpc
 		}
 	}
 
-	// 13.2 Setup MASQUERADE
-	if err := s.iptablesDriver.SetupMasquerade(publicSubnet.CIDRBlock); err != nil {
+	// 13.3 Setup MASQUERADE
+	if err := s.iptablesDriver.SetupMasquerade(publicSubnet.CIDRBlock, bridgeName); err != nil {
 		l.Error("OS provisioning failed: MASQUERADE setup error", zap.Error(err), zap.String("vpc_id", vpcID))
 		s.vpcRepo.UpdateStatus(ctx, vpcID, domain.VPCStatusError)
 		return nil, fmt.Errorf("failed to setup MASQUERADE: %w", err)

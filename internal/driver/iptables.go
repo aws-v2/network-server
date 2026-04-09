@@ -9,7 +9,7 @@ import (
 )
 
 type IptablesDriver interface {
-	SetupMasquerade(cidr string) error
+	SetupMasquerade(cidr string, bridgeName string) error
 	SetupDNAT(publicIP, privateIP string) error
 	SetupSNAT(privateIP, publicIP string) error
 	RemoveDNAT(publicIP, privateIP string) error
@@ -28,22 +28,43 @@ func NewIptablesDriver() IptablesDriver {
 	return &linuxIptablesDriver{}
 }
 
-func (d *linuxIptablesDriver) SetupMasquerade(cidr string) error {
+func (d *linuxIptablesDriver) SetupMasquerade(cidr string, bridgeName string) error {
 	if runtime.GOOS != "linux" {
 		zap.L().Warn("Skipping iptables MASQUERADE: not on Linux", zap.String("cidr", cidr))
 		return nil
 	}
 
-	// Check if rule exists: iptables -t nat -C POSTROUTING -s <cidr> -j MASQUERADE
-	exists, _ := d.ruleExists("nat", "POSTROUTING", "-s", cidr, "-j", MASQUERADE)
-	if exists {
-		return nil
+	// 1. Enable IP Forwarding
+	zap.L().Info("Enabling IPv4 forwarding")
+	_ = exec.Command("sysctl", "-w", "net.ipv4.ip_forward=1").Run()
+
+	// 2. Setup POSTROUTING Masquerade
+	exists, _ := d.ruleExists("nat", "POSTROUTING", "-s", cidr, "!", "-o", bridgeName, "-j", MASQUERADE)
+	if !exists {
+		zap.L().Info("Adding iptables MASQUERADE rule", zap.String("cidr", cidr), zap.String("bridge", bridgeName))
+		cmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", cidr, "!", "-o", bridgeName, "-j", "MASQUERADE")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to add MASQUERADE rule: %w (output: %s)", err, string(out))
+		}
 	}
 
-	zap.L().Info("Adding iptables MASQUERADE rule", zap.String("cidr", cidr))
-	cmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", cidr, "-j", "MASQUERADE")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to add MASQUERADE rule: %w (output: %s)", err, string(out))
+	// 3. Setup FORWARD allow rules for this bridge
+	fwdInExists, _ := d.ruleExists("filter", "FORWARD", "-i", bridgeName, "-j", "ACCEPT")
+	if !fwdInExists {
+		zap.L().Info("Adding iptables FORWARD rule (in)", zap.String("bridge", bridgeName))
+		cmd := exec.Command("iptables", "-A", "FORWARD", "-i", bridgeName, "-j", "ACCEPT")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			zap.L().Warn("failed to add FORWARD rule (in)", zap.Error(err), zap.String("output", string(out)))
+		}
+	}
+
+	fwdOutExists, _ := d.ruleExists("filter", "FORWARD", "-o", bridgeName, "-j", "ACCEPT")
+	if !fwdOutExists {
+		zap.L().Info("Adding iptables FORWARD rule (out)", zap.String("bridge", bridgeName))
+		cmd := exec.Command("iptables", "-A", "FORWARD", "-o", bridgeName, "-j", "ACCEPT")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			zap.L().Warn("failed to add FORWARD rule (out)", zap.Error(err), zap.String("output", string(out)))
+		}
 	}
 
 	return nil

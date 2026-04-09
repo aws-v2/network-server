@@ -104,7 +104,7 @@ func (s *networkService) ReconcileVPCs(ctx context.Context) error {
 					publicSubnetCIDR = sn.CIDRBlock
 					publicGatewayIP = gateway
 
-					if err := s.iptablesDriver.SetupMasquerade(sn.CIDRBlock); err != nil {
+					if err := s.iptablesDriver.SetupMasquerade(sn.CIDRBlock, vpc.BridgeName); err != nil {
 						vpcLog.Error("Reconciliation: MASQUERADE setup error",
 							zap.Error(err),
 							zap.String("subnet_cidr", sn.CIDRBlock),
