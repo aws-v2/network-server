@@ -31,6 +31,10 @@ COPY --from=builder /app/network-service .
 # Copy migrations
 COPY --from=builder /app/internal/infrastructure/migrations ./internal/infrastructure/migrations
 
+# Bake environment variables
+ARG APP_PROFILE=dev
+COPY .env-${APP_PROFILE} .env
+
 # Expose the port
 EXPOSE 8084
 

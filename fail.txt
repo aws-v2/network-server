@@ -1,9 +1,0 @@
-﻿=== RUN   TestCreateVPC_TransactionFailure
-    failure_modes_test.go:40: 
-        	Error Trace:	C:/Users/0x6D617274696E/Desktop/aws-v8/network-server/tests/service/failure_modes_test.go:40
-        	Error:      	"failed to create VPC: assert.AnError general error for testing" does not contain "failed to create VPC record"
-        	Test:       	TestCreateVPC_TransactionFailure
---- FAIL: TestCreateVPC_TransactionFailure (0.00s)
-FAIL
-FAIL	github.com/martin/network-service/tests/service	0.548s
-FAIL

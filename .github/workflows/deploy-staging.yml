@@ -19,12 +19,17 @@ jobs:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
 
+    - name: Create .env-staging from secret
+      run: echo "${{ secrets.STAGING_ENV_FILE }}" > .env-staging
+
     - name: Build and push
       uses: docker/build-push-action@v5
       with:
         context: .
         push: true
         tags: qarani/network-server:staging
+        build-args: |
+          APP_PROFILE=staging
 
   deploy:
     needs: build-and-push
@@ -51,5 +56,4 @@ jobs:
             docker run -d --name network-server-staging \
               --network aws_backend \
               -p 8084:8084 \
-              -e HTTP_PORT=8084 \
               qarani/network-server:staging

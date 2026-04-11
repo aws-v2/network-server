@@ -33,7 +33,10 @@ func main() {
 	logger.Init(cfg.Profile)
 	defer zap.L().Sync()
 
-	zap.L().Info("Starting Network Service", zap.String("service", cfg.Server.ServiceName))
+	zap.L().Info("Starting Network Service", 
+		zap.String("service", cfg.Server.ServiceName),
+		zap.String("profile", cfg.Profile),
+	)
 
 	// 3. Connect to NATS
 	var nc *nats.Conn

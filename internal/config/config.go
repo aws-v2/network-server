@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -50,6 +51,8 @@ type ServerConfig struct {
 
 func Load() (*Config, error) {
 	_ = godotenv.Load()
+	profile := strings.ToLower(getEnv("APP_PROFILE", "dev"))
+	_ = godotenv.Load(".env-" + profile)
 
 	cfg := &Config{
 		DB: DBConfig{
@@ -65,7 +68,7 @@ func Load() (*Config, error) {
 			ConnMaxIdleTime: getEnvDuration("DB_CONN_MAX_IDLE_TIME", 10*time.Minute),
 		},
 		NATS: NATSConfig{
-			URL:      getEnv("NATS_URL", getEnv("DEV_NATS_URL", "nats://auth-server:auth-secret@localhost:4222")),
+			URL:      getEnv("NATS_URL", "nats://localhost:4222"),
 			User:     getEnv("NATS_USER", ""),
 			Password: getEnv("NATS_PASSWORD", ""),
 		},

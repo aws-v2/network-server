@@ -15,6 +15,13 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
 // Domain models (duplicated here for simplicity/standalone utility)
 type UserRegisteredEvent struct {
 	CorrelationID string `json:"correlation_id"`
@@ -69,7 +76,7 @@ func registerCmd() {
 	fs := flag.NewFlagSet("register", flag.ExitOnError)
 	tenantID := fs.String("tenant", "tenant-001", "Tenant ID")
 	tenantName := fs.String("name", "Test Tenant", "Tenant Name")
-	natsURL := fs.String("nats", "nats://auth-server:auth-secret@localhost:4222", "NATS URL")
+	natsURL := fs.String("nats", getEnv("NATS_URL", "nats://localhost:4222"), "NATS URL")
 	fs.Parse(os.Args[2:])
 
 	nc, err := nats.Connect(*natsURL)
@@ -85,7 +92,7 @@ func batchCmd() {
 	fs := flag.NewFlagSet("batch", flag.ExitOnError)
 	count := fs.Int("count", 5, "Number of events to publish")
 	concurrent := fs.Bool("concurrent", true, "Publish concurrently")
-	natsURL := fs.String("nats", "nats://auth-server:auth-secret@localhost:4222", "NATS URL")
+	natsURL := fs.String("nats", getEnv("NATS_URL", "nats://localhost:4222"), "NATS URL")
 	fs.Parse(os.Args[2:])
 
 	nc, err := nats.Connect(*natsURL)
@@ -114,7 +121,7 @@ func batchCmd() {
 
 func eipAssocCmd() {
 	fs := flag.NewFlagSet("eip-assoc", flag.ExitOnError)
-	apiURL := fs.String("api", "http://localhost:8080", "API URL")
+	apiURL := fs.String("api", getEnv("API_URL", "http://localhost:8084"), "API URL")
 	eipID := fs.String("eip", "", "EIP ID")
 	instID := fs.String("instance", "", "Instance ID")
 	privIP := fs.String("ip", "", "Private IP")
@@ -141,7 +148,7 @@ func eipAssocCmd() {
 
 func eipDisassocCmd() {
 	fs := flag.NewFlagSet("eip-disassoc", flag.ExitOnError)
-	apiURL := fs.String("api", "http://localhost:8080", "API URL")
+	apiURL := fs.String("api", getEnv("API_URL", "http://localhost:8084"), "API URL")
 	eipID := fs.String("eip", "", "EIP ID")
 	fs.Parse(os.Args[2:])
 
@@ -179,7 +186,7 @@ func publishEvent(nc *nats.Conn, tenantID, tenantName string) {
 
 func attachSubnetCmd() {
 	fs := flag.NewFlagSet("attach-subnet", flag.ExitOnError)
-	natsURL := fs.String("nats", "nats://auth-server:auth-secret@localhost:4222", "NATS URL")
+	natsURL := fs.String("nats", getEnv("NATS_URL", "nats://localhost:4222"), "NATS URL")
 	tenantID := fs.String("tenant", "tenant-001", "Tenant ID")
 	arn := fs.String("arn", "", "Resource ARN")
 	vpcID := fs.String("vpc", "", "VPC ID")
@@ -211,7 +218,7 @@ func attachSubnetCmd() {
 
 func resolveResourceCmd() {
 	fs := flag.NewFlagSet("resolve-resource", flag.ExitOnError)
-	natsURL := fs.String("nats", "nats://auth-server:auth-secret@localhost:4222", "NATS URL")
+	natsURL := fs.String("nats", getEnv("NATS_URL", "nats://localhost:4222"), "NATS URL")
 	arn := fs.String("arn", "", "Resource ARN")
 	fs.Parse(os.Args[2:])
 
@@ -237,7 +244,7 @@ func resolveResourceCmd() {
 
 func listResourcesCmd() {
 	fs := flag.NewFlagSet("list-resources", flag.ExitOnError)
-	natsURL := fs.String("nats", "nats://auth-server:auth-secret@localhost:4222", "NATS URL")
+	natsURL := fs.String("nats", getEnv("NATS_URL", "nats://localhost:4222"), "NATS URL")
 	tenantID := fs.String("tenant", "tenant-001", "Tenant ID")
 	vpcID := fs.String("vpc", "", "VPC ID")
 	fs.Parse(os.Args[2:])
@@ -265,7 +272,7 @@ func listResourcesCmd() {
 
 func resolveDefaultCmd() {
 	fs := flag.NewFlagSet("resolve-default", flag.ExitOnError)
-	natsURL := fs.String("nats", "nats://auth-server:auth-secret@localhost:4222", "NATS URL")
+	natsURL := fs.String("nats", getEnv("NATS_URL", "nats://localhost:4222"), "NATS URL")
 	tenantID := fs.String("tenant", "tenant-001", "Tenant ID")
 	fs.Parse(os.Args[2:])
 
@@ -287,7 +294,7 @@ func resolveDefaultCmd() {
 
 func registerComputeCmd() {
 	fs := flag.NewFlagSet("register-compute", flag.ExitOnError)
-	natsURL := fs.String("nats", "nats://auth-server:auth-secret@localhost:4222", "NATS URL")
+	natsURL := fs.String("nats", getEnv("NATS_URL", "nats://localhost:4222"), "NATS URL")
 	id := fs.String("id", "", "Instance ID")
 	ip := fs.String("ip", "", "IP Address")
 	port := fs.Int("port", 80, "Service Port")
@@ -324,7 +331,7 @@ func registerComputeCmd() {
 
 func computeHealthCmd() {
 	fs := flag.NewFlagSet("compute-health", flag.ExitOnError)
-	natsURL := fs.String("nats", "nats://auth-server:auth-secret@localhost:4222", "NATS URL")
+	natsURL := fs.String("nats", getEnv("NATS_URL", "nats://localhost:4222"), "NATS URL")
 	id := fs.String("id", "", "Instance ID")
 	status := fs.String("status", "healthy", "Status (healthy, unhealthy, starting, stopping)")
 	fs.Parse(os.Args[2:])
@@ -352,7 +359,7 @@ func computeHealthCmd() {
 
 func deregisterComputeCmd() {
 	fs := flag.NewFlagSet("deregister-compute", flag.ExitOnError)
-	natsURL := fs.String("nats", "nats://auth-server:auth-secret@localhost:4222", "NATS URL")
+	natsURL := fs.String("nats", getEnv("NATS_URL", "nats://localhost:4222"), "NATS URL")
 	id := fs.String("id", "", "Instance ID")
 	fs.Parse(os.Args[2:])
 
@@ -378,7 +385,7 @@ func deregisterComputeCmd() {
 
 func listComputeCmd() {
 	fs := flag.NewFlagSet("list-compute", flag.ExitOnError)
-	natsURL := fs.String("nats", "nats://auth-server:auth-secret@localhost:4222", "NATS URL")
+	natsURL := fs.String("nats", getEnv("NATS_URL", "nats://localhost:4222"), "NATS URL")
 	fs.Parse(os.Args[2:])
 
 	nc, _ := nats.Connect(*natsURL)
@@ -398,7 +405,7 @@ func listComputeCmd() {
 
 func computeLifecycleCmd() {
 	fs := flag.NewFlagSet("compute-lifecycle", flag.ExitOnError)
-	natsURL := fs.String("nats", "nats://auth-server:auth-secret@localhost:4222", "NATS URL")
+	natsURL := fs.String("nats", getEnv("NATS_URL", "nats://localhost:4222"), "NATS URL")
 	id := fs.String("id", "", "Instance ID")
 	eventType := fs.String("type", "INSTANCE_STARTED", "Event Type (INSTANCE_STARTED, INSTANCE_STOPPED, HEALTH_UPDATE)")
 	ip := fs.String("ip", "10.0.1.50", "IP Address")
@@ -442,7 +449,7 @@ func computeLifecycleCmd() {
 
 func routeComputeCmd() {
 	fs := flag.NewFlagSet("route-compute", flag.ExitOnError)
-	natsURL := fs.String("nats", "nats://auth-server:auth-secret@localhost:4222", "NATS URL")
+	natsURL := fs.String("nats", getEnv("NATS_URL", "nats://localhost:4222"), "NATS URL")
 	fs.Parse(os.Args[2:])
 
 	nc, _ := nats.Connect(*natsURL)
