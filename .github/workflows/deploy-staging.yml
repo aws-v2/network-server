@@ -56,4 +56,6 @@ jobs:
             docker run -d --name network-server-staging \
               --network aws_backend \
               -p 8084:8084 \
+              -e APP_PROFILE=staging \
+              
               qarani/network-server:staging

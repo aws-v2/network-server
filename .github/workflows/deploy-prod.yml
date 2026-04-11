@@ -53,4 +53,5 @@ jobs:
             docker run -d --name network-server \
               --network mini-aws-network \
               -p 8084:8084 \
+              -e APP_PROFILE=prod \
               qarani/network-server:latest
