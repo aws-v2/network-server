@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,6 +48,31 @@ func main() {
 		opts = append(opts, nats.UserInfo(cfg.NATS.User, cfg.NATS.Password))
 	}
 
+	// Reachability check for NATS
+	natsMaxRetries := 5
+	parsedURL, err := url.Parse(cfg.NATS.URL)
+	if err != nil {
+		zap.L().Fatal("Failed to parse NATS URL", zap.Error(err), zap.String("url", cfg.NATS.URL))
+	}
+	host := parsedURL.Host
+	if !strings.Contains(host, ":") {
+		host = host + ":4222"
+	}
+
+	for i := 0; i < natsMaxRetries; i++ {
+		zap.L().Info("Checking NATS reachability...", zap.String("host", host), zap.Int("attempt", i+1))
+		conn, err := net.DialTimeout("tcp", host, 2*time.Second)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		zap.L().Warn("NATS not reachable yet", zap.String("host", host), zap.Int("attempt", i+1), zap.Error(err))
+		if i == natsMaxRetries-1 {
+			zap.L().Fatal("NATS unreachable after retries", zap.String("host", host))
+		}
+		time.Sleep(2 * time.Second)
+	}
+
 	nc, err = nats.Connect(cfg.NATS.URL, opts...)
 	if err != nil {
 		zap.L().Fatal("Failed to connect to NATS", zap.Error(err), zap.String("url", cfg.NATS.URL))
@@ -67,16 +95,16 @@ func main() {
 	}
 
 	var db *database.DB
-	maxRetries := 4
+	dbMaxRetries := 4
 
-	for i := 0; i < maxRetries; i++ {
+	for i := 0; i < dbMaxRetries; i++ {
 		zap.L().Info("Attempting to connect to PostgreSQL...", zap.Int("attempt", i+1))
 		db, err = database.Connect(dbConfig)
 		if err == nil {
 			break
 		}
 		zap.L().Warn("Failed to connect to PostgreSQL", zap.Int("attempt", i+1), zap.Error(err))
-		if i < maxRetries-1 {
+		if i < dbMaxRetries-1 {
 			time.Sleep(2 * time.Second)
 		}
 	}
