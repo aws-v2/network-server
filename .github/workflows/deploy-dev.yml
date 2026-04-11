@@ -42,5 +42,3 @@ jobs:
         context: .
         push: true
         tags: qarani/network-server:dev
-        build-args: |
-          APP_PROFILE=dev

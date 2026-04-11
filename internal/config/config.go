@@ -51,8 +51,8 @@ type ServerConfig struct {
 
 func Load() (*Config, error) {
 	_ = godotenv.Load()
-	profile := strings.ToLower(getEnv("APP_PROFILE", "dev"))
-	_ = godotenv.Load(".env-" + profile)
+	profile := getEnv("APP_PROFILE", "DEV")
+	_ = godotenv.Load(".env-" + strings.ToLower(profile))
 
 	cfg := &Config{
 		DB: DBConfig{
@@ -76,7 +76,7 @@ func Load() (*Config, error) {
 			HTTPPort:        getEnvInt("HTTP_PORT", 8084),
 			PublicInterface: getEnv("PUBLIC_INTERFACE", "eth0"),
 		},
-		Profile: getEnv("APP_PROFILE", "DEV"),
+		Profile: profile,
 	}
 
 	return cfg, nil

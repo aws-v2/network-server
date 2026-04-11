@@ -20,17 +20,12 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Create .env-prod from secret
-        run: echo "${{ secrets.PROD_ENV_FILE }}" > .env-prod
-
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: qarani/network-server:latest
-          build-args: |
-            APP_PROFILE=prod
 
   deploy:
     needs: build-and-push
@@ -54,4 +49,12 @@ jobs:
               --network mini-aws-network \
               -p 8084:8084 \
               -e APP_PROFILE=prod \
+              -e DB_HOST=${{ secrets.PROD_DB_HOST }} \
+              -e DB_PORT=5432 \
+              -e DB_USER=${{ secrets.PROD_DB_USER }} \
+              -e DB_PASSWORD=${{ secrets.PROD_DB_PASSWORD }} \
+              -e DB_NAME=${{ secrets.PROD_DB_NAME }} \
+              -e NATS_URL=${{ secrets.PROD_NATS_URL }} \
+              -e NATS_USER=${{ secrets.PROD_NATS_USER }} \
+              -e NATS_PASSWORD=${{ secrets.PROD_NATS_PASSWORD }} \
               qarani/network-server:latest
