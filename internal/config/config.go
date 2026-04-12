@@ -21,6 +21,9 @@ type Config struct {
 
 	// Profiles
 	Profile string
+
+	// Minio
+	Minio MinioConfig
 }
 
 type DBConfig struct {
@@ -34,12 +37,25 @@ type DBConfig struct {
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
+	MaxRetries      int
+	RetryInterval   time.Duration
 }
 
 type NATSConfig struct {
-	URL      string
-	User     string
-	Password string
+	URL           string
+	User          string
+	Password      string
+	MaxRetries    int
+	RetryInterval time.Duration
+	DialTimeout   time.Duration
+}
+
+type MinioConfig struct {
+	Endpoint  string
+	AccessKey string
+	SecretKey string
+	UseSSL    bool
+	Bucket    string
 }
 
 type ServerConfig struct {
@@ -47,11 +63,12 @@ type ServerConfig struct {
 	ServiceName     string
 	HTTPPort        int
 	PublicInterface string
+	ShutdownTimeout time.Duration
 }
 
 func Load() (*Config, error) {
 	_ = godotenv.Load()
-	profile := getEnv("APP_PROFILE", "DEV")
+	profile := getEnv("APP_PROFILE", "dev")
 	_ = godotenv.Load(".env-" + strings.ToLower(profile))
 
 	cfg := &Config{
@@ -66,15 +83,28 @@ func Load() (*Config, error) {
 			MaxIdleConns:    getEnvInt("DB_MAX_IDLE_CONNS", 10),
 			ConnMaxLifetime: getEnvDuration("DB_CONN_MAX_LIFETIME", 5*time.Minute),
 			ConnMaxIdleTime: getEnvDuration("DB_CONN_MAX_IDLE_TIME", 10*time.Minute),
+			MaxRetries:      getEnvInt("DB_MAX_RETRIES", 4),
+			RetryInterval:   getEnvDuration("DB_RETRY_INTERVAL", 2*time.Second),
 		},
 		NATS: NATSConfig{
-			URL:      getEnv("NATS_URL", "nats://localhost:4222"),
-			User:     getEnv("NATS_USER", ""),
-			Password: getEnv("NATS_PASSWORD", ""),
+			URL:           getEnv("NATS_URL", "nats://localhost:4222"),
+			User:          getEnv("NATS_USER", ""),
+			Password:      getEnv("NATS_PASSWORD", ""),
+			MaxRetries:    getEnvInt("NATS_MAX_RETRIES", 5),
+			RetryInterval: getEnvDuration("NATS_RETRY_INTERVAL", 2*time.Second),
+			DialTimeout:   getEnvDuration("NATS_DIAL_TIMEOUT", 2*time.Second),
+		},
+		Minio: MinioConfig{
+			Endpoint:  getEnv("MINIO_ENDPOINT", "localhost:9000"),
+			AccessKey: getEnv("MINIO_ACCESS_KEY", "minioadmin"),
+			SecretKey: getEnv("MINIO_SECRET_KEY", "minioadmin"),
+			UseSSL:    getEnvBool("MINIO_USE_SSL", false),
+			Bucket:    getEnv("MINIO_BUCKET", "network-service"),
 		},
 		Server: ServerConfig{
 			HTTPPort:        getEnvInt("HTTP_PORT", 8084),
 			PublicInterface: getEnv("PUBLIC_INTERFACE", "eth0"),
+			ShutdownTimeout: getEnvDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
 		},
 		Profile: profile,
 	}
@@ -102,6 +132,15 @@ func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
 	if val := os.Getenv(key); val != "" {
 		if d, err := time.ParseDuration(val); err == nil {
 			return d
+		}
+	}
+	return defaultVal
+}
+
+func getEnvBool(key string, defaultVal bool) bool {
+	if val := os.Getenv(key); val != "" {
+		if b, err := strconv.ParseBool(val); err == nil {
+			return b
 		}
 	}
 	return defaultVal
