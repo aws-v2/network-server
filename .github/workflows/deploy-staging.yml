@@ -56,8 +56,8 @@ jobs:
               -e PUBLIC_INTERFACE=eth0 \
               -e DB_HOST=postgres-staging \
               -e DB_PORT=5432 \
-              -e DB_USER=root \
-              -e DB_PASSWORD=root \
+              -e DB_USER=postgres-staging-user \
+              -e DB_PASSWORD=postgres-staging-password \
               -e DB_NAME=network_db \
               -e DB_SSLMODE=disable \
               -e NATS_URL=nats://nats-staging:4222 \
