@@ -56,6 +56,7 @@ jobs:
               -e PUBLIC_INTERFACE=eth0 \
               -e DB_HOST=postgres-staging \
               -e DB_PORT=5432 \
+              -e DOCS_PATH=/app/docs \
               -e DB_USER=postgres-staging-user \
               -e DB_PASSWORD=postgres-staging-password \
               -e DB_NAME=network_db \
