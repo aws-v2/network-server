@@ -24,6 +24,7 @@ type Config struct {
 
 	// Minio
 	Minio MinioConfig
+	 Eureka EurekaConfig
 }
 
 type DBConfig struct {
@@ -65,6 +66,16 @@ type ServerConfig struct {
 	PublicInterface string
 	ShutdownTimeout time.Duration
 }
+type EurekaConfig struct {
+    ServerURL         string
+    AppName           string
+    HostName          string
+    IPAddr            string
+    Port              int
+    VipAddress        string
+    InstanceID        string
+    HeartbeatInterval time.Duration
+}
 
 func Load() (*Config, error) {
 	_ = godotenv.Load()
@@ -86,6 +97,16 @@ func Load() (*Config, error) {
 			MaxRetries:      getEnvInt("DB_MAX_RETRIES", 4),
 			RetryInterval:   getEnvDuration("DB_RETRY_INTERVAL", 2*time.Second),
 		},
+		Eureka: EurekaConfig{
+    ServerURL:         getEnv("EUREKA_SERVER_URL", "http://localhost:8761/eureka"),
+    AppName:           getEnv("EUREKA_APP_NAME", "NETWORK-SERVICE"),
+    HostName:          getEnv("EUREKA_HOSTNAME", "localhost"),
+    IPAddr:            getEnv("EUREKA_IP_ADDR", "127.0.0.1"),
+    Port:              getEnvInt("SERVER_PORT", 8084),
+    VipAddress:        getEnv("EUREKA_VIP_ADDRESS", "network-service"),
+    InstanceID:        getEnv("EUREKA_INSTANCE_ID", "network-service:8084"),
+    HeartbeatInterval: getEnvDuration("EUREKA_HEARTBEAT_INTERVAL", 30*time.Second),
+},
 		NATS: NATSConfig{
 			URL:           getEnv("NATS_URL", "nats://localhost:4222"),
 			User:          getEnv("NATS_USER", ""),

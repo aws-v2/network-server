@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-	"net/http"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -12,13 +14,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"github.com/martin/network-service/internal/application"
 	"github.com/martin/network-service/internal/config"
 	"github.com/martin/network-service/internal/driver"
 	"github.com/martin/network-service/internal/registry"
 	"github.com/martin/network-service/internal/repository"
 	"github.com/martin/network-service/internal/service"
-	httpTransport "github.com/martin/network-service/internal/transport/http"
+	transportHTTP "github.com/martin/network-service/internal/transport/http"
 	natsTransport "github.com/martin/network-service/internal/transport/nats"
+	"github.com/martin/network-service/internal/utils"
 	"github.com/martin/network-service/pkg/database"
 	"github.com/martin/network-service/pkg/logger"
 	"github.com/nats-io/nats.go"
@@ -36,7 +41,7 @@ func main() {
 	logger.Init(cfg.Profile)
 	defer zap.L().Sync()
 
-	zap.L().Info("Starting Network Service", 
+	zap.L().Info("Starting Network Service",
 		zap.String("service", cfg.Server.ServiceName),
 		zap.String("profile", cfg.Profile),
 	)
@@ -48,7 +53,6 @@ func main() {
 		opts = append(opts, nats.UserInfo(cfg.NATS.User, cfg.NATS.Password))
 	}
 
-	// Reachability check for NATS
 	parsedURL, err := url.Parse(cfg.NATS.URL)
 	if err != nil {
 		zap.L().Fatal("Failed to parse NATS URL", zap.Error(err), zap.String("url", cfg.NATS.URL))
@@ -158,7 +162,6 @@ func main() {
 		if err := netService.ReconcileVPCs(context.Background()); err != nil {
 			zap.L().Error("Startup reconciliation failed", zap.Error(err))
 		}
-
 		zap.L().Info("Triggering background RDS port reconciliation")
 		if err := netService.ReconcileRDSPorts(context.Background()); err != nil {
 			zap.L().Error("RDS port reconciliation failed", zap.Error(err))
@@ -173,23 +176,45 @@ func main() {
 		}
 	}()
 
-	// 7. Setup HTTP Handler
-	mux := http.NewServeMux()
-	h := httpTransport.NewHandler()
-	httpTransport.MapRoutes(mux, h)
+	// 7. Register with Eureka
+	for i := 0; i < 3; i++ {
+		if err := registerWithEureka(cfg.Eureka); err != nil {
+			zap.L().Warn("Eureka registration attempt failed",
+				zap.Int("attempt", i+1),
+				zap.Error(err),
+			)
+			time.Sleep(5 * time.Second)
+		} else {
+			break
+		}
+	}
+
+	// Start Eureka heartbeat
+	go sendHeartbeat(cfg.Eureka)
+
+	// 8. Setup HTTP Handlers
+	networkHandler := transportHTTP.NewNetworkHandler()
+	docsHandler := transportHTTP.NewDocsHandler(
+		application.NewDocsService(utils.GetEnv("DOCS_PATH", "./docs")),
+	)
+
+	// 9. Setup Gin Router
+	r := gin.New()
+	r.Use(gin.Recovery())
+	transportHTTP.SetupRoutes(r, networkHandler, docsHandler)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.HTTPPort),
-		Handler: mux,
+		Handler: r,
 	}
 
-	// 8. Setup NATS Subscriber
+	// 10. Setup NATS Subscriber
 	sub := natsTransport.NewSubscriber(nc, netService)
 	if err := sub.Subscribe(); err != nil {
 		zap.L().Fatal("could not subscribe to NATS", zap.Error(err))
 	}
 
-	// 9. Graceful Shutdown
+	// 11. Start HTTP Server
 	go func() {
 		zap.L().Info("HTTP Server listening", zap.Int("port", cfg.Server.HTTPPort))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -197,11 +222,17 @@ func main() {
 		}
 	}()
 
+	// 12. Graceful Shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 
 	zap.L().Info("Shutting down Network Service...")
+
+	// Deregister from Eureka before exit
+	if err := deregisterFromEureka(cfg.Eureka); err != nil {
+		zap.L().Warn("Failed to deregister from Eureka", zap.Error(err))
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
@@ -211,6 +242,111 @@ func main() {
 	}
 
 	zap.L().Info("Network Service exited gracefully")
+}
+
+// registerWithEureka registers this service instance with the Eureka server.
+func registerWithEureka(cfg config.EurekaConfig) error {
+	instance := map[string]interface{}{
+		"instance": map[string]interface{}{
+			"instanceId": cfg.InstanceID,
+			"hostName":   cfg.HostName,
+			"app":        cfg.AppName,
+			"ipAddr":     cfg.IPAddr,
+			"vipAddress": cfg.VipAddress,
+			"status":     "UP",
+			"port": map[string]interface{}{
+				"$":        cfg.Port,
+				"@enabled": "true",
+			},
+			"dataCenterInfo": map[string]interface{}{
+				"@class": "com.netflix.appinfo.InstanceInfo$DefaultDataCenterInfo",
+				"name":   "MyOwn",
+			},
+			"healthCheckUrl": fmt.Sprintf("http://%s:%d/health", cfg.HostName, cfg.Port),
+			"statusPageUrl":  fmt.Sprintf("http://%s:%d/health", cfg.HostName, cfg.Port),
+			"homePageUrl":    fmt.Sprintf("http://%s:%d/", cfg.HostName, cfg.Port),
+		},
+	}
+
+	jsonData, err := json.Marshal(instance)
+	if err != nil {
+		return fmt.Errorf("failed to marshal Eureka registration data: %w", err)
+	}
+
+	eurekaURL := fmt.Sprintf("%s/apps/%s", cfg.ServerURL, cfg.AppName)
+	req, err := http.NewRequest(http.MethodPost, eurekaURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create registration request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to register with Eureka: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("eureka registration failed with status %d", resp.StatusCode)
+	}
+
+	zap.L().Info("Successfully registered with Eureka", zap.String("url", eurekaURL))
+	return nil
+}
+
+// sendHeartbeat sends periodic PUT heartbeats to Eureka to keep the instance alive.
+func sendHeartbeat(cfg config.EurekaConfig) {
+	ticker := time.NewTicker(cfg.HeartbeatInterval)
+	defer ticker.Stop()
+
+	eurekaURL := fmt.Sprintf("%s/apps/%s/%s", cfg.ServerURL, cfg.AppName, cfg.InstanceID)
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	for range ticker.C {
+		req, err := http.NewRequest(http.MethodPut, eurekaURL, nil)
+		if err != nil {
+			zap.L().Error("Failed to create heartbeat request", zap.Error(err))
+			continue
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			zap.L().Error("Failed to send heartbeat to Eureka", zap.Error(err))
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+			zap.L().Warn("Heartbeat failed", zap.Int("status", resp.StatusCode))
+		} else {
+			zap.L().Debug("Heartbeat sent successfully to Eureka")
+		}
+		resp.Body.Close()
+	}
+}
+
+// deregisterFromEureka removes this instance from Eureka on graceful shutdown.
+func deregisterFromEureka(cfg config.EurekaConfig) error {
+	eurekaURL := fmt.Sprintf("%s/apps/%s/%s", cfg.ServerURL, cfg.AppName, cfg.InstanceID)
+	req, err := http.NewRequest(http.MethodDelete, eurekaURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create deregistration request: %w", err)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to deregister from Eureka: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("deregistration failed with status %d", resp.StatusCode)
+	}
+
+	zap.L().Info("Successfully deregistered from Eureka")
+	return nil
 }
 
 func getEnv(key, defaultValue string) string {
