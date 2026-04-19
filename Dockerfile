@@ -30,7 +30,7 @@ RUN apk --no-cache add ca-certificates
 COPY --from=builder /app/network-service .
 # Copy migrations
 COPY --from=builder /app/internal/infrastructure/migrations ./internal/infrastructure/migrations
-
+COPY --from=builder /app/docs ./docs
 
 # Expose the port
 EXPOSE 8084
