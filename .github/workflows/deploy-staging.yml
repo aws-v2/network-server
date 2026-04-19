@@ -64,7 +64,10 @@ jobs:
               -e NATS_URL=nats://nats-staging:4222 \
               -e NATS_USER=nats-staging-user \
               -e NATS_PASSWORD=nats-staging-password \
+              -e EUREKA_SERVER_URL=http://discovery-server-staging:8761/eureka \
+              -e EUREKA_APP_NAME=NETWORK-SERVICE \
+              -e EUREKA_HOSTNAME=network-server-staging \
+              -e EUREKA_IP_ADDR=network-server-staging \
+              -e EUREKA_VIP_ADDRESS=network-service \
+              -e EUREKA_INSTANCE_ID=network-service-staging:8084 \
               qarani/network-server:staging
-
-
-              
