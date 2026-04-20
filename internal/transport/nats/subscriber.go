@@ -14,52 +14,99 @@ import (
 	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 )
+type SubjectConfig struct {
+	Prefix  string // dev.v1
+	Service string // network
+}
+func (c SubjectConfig) Base() string {
+	return c.Prefix + "." + c.Service
+}
+var (
+	SubjectUserRegistered string
+	SubjectVPCCreate      string
+	SubjectVPCCreated     string
+	SubjectVPCList        string
 
-const (
-	SubjectUserRegistered = "dev.auth.v1.user.registered"
-	SubjectVPCCreate      = "dev.network.v1.vpc.create"
-	SubjectVPCCreated     = "dev.network.v1.vpc.created"
-	SubjectVPCList        = "dev.network.v1.vpc.list"
+	SubjectVPCDefaultGet     string
+	SubjectVPCValidate       string
+	SubjectVPCDefaultResolve string
+	SubjectVPCReconcile      string
 
-	SubjectVPCDefaultGet     = "dev.network.v1.vpc.default.get"
-	SubjectVPCValidate       = "dev.network.v1.vpc.validate"
-	SubjectVPCDefaultResolve = "dev.network.v1.vpc.default.resolve"
-	SubjectVPCReconcile      = "dev.network.v1.vpc.reconcile"
+	SubjectResourceAttach string
+	SubjectResourceDetach string
 
-	SubjectResourceAttach = "dev.network.v1.resource.attach"
-	SubjectResourceDetach = "dev.network.v1.resource.detach"
+	SubjectResourceResolve  string
+	SubjectVPCResourcesList string
 
-	SubjectResourceResolve  = "dev.network.v1.resource.resolve"
-	SubjectVPCResourcesList = "dev.network.v1.vpc.resources.list"
+	SubjectComputeRegister   string
+	SubjectComputeHealth     string
+	SubjectComputeDeregister string
+	SubjectComputeList       string
+	SubjectComputeRoute      string
 
-	SubjectComputeRegister   = "dev.network.v1.compute.register"
-	SubjectComputeHealth     = "dev.network.v1.compute.health"
-	SubjectComputeDeregister = "dev.network.v1.compute.deregister"
-	SubjectComputeList       = "dev.network.v1.compute.list"
-	SubjectComputeRoute      = "dev.network.v1.compute.route"
+	SubjectComputeLifecycle string
 
-	SubjectComputeLifecycle = "dev.compute.v1.instance.lifecycle"
+	SubjectInstancePrepare string
+	SubjectInstanceRelease string
 
-	SubjectInstancePrepare = "dev.network.v1.instance.prepare"
-	SubjectInstanceRelease = "dev.network.v1.instance.release"
+	SubjectEIPAllocate     string
+	SubjectEIPAssociate    string
+	SubjectEIPDisassociate string
 
-	SubjectEIPAllocate     = "dev.network.v1.eip.allocate"
-	SubjectEIPAssociate    = "dev.network.v1.eip.associate"
-	SubjectEIPDisassociate = "dev.network.v1.eip.disassociate"
-
-	SubjectRDSExpose   = "dev.network.v1.rds.expose"
-	SubjectRDSUnexpose = "dev.network.v1.rds.unexpose"
+	SubjectRDSExpose   string
+	SubjectRDSUnexpose string
 )
+func InitSubjects(prefix string) {
+	base := prefix + ".network"
 
+	SubjectUserRegistered = prefix + ".auth.user.registered"
+
+	SubjectVPCCreate = base + ".vpc.create"
+	SubjectVPCCreated = base + ".vpc.created"
+	SubjectVPCList = base + ".vpc.list"
+
+	SubjectVPCDefaultGet = base + ".vpc.default.get"
+	SubjectVPCValidate = base + ".vpc.validate"
+	SubjectVPCDefaultResolve = base + ".vpc.default.resolve"
+	SubjectVPCReconcile = base + ".vpc.reconcile"
+
+	SubjectResourceAttach = base + ".resource.attach"
+	SubjectResourceDetach = base + ".resource.detach"
+
+	SubjectResourceResolve = base + ".resource.resolve"
+	SubjectVPCResourcesList = base + ".vpc.resources.list"
+
+	SubjectComputeRegister = base + ".compute.register"
+	SubjectComputeHealth = base + ".compute.health"
+	SubjectComputeDeregister = base + ".compute.deregister"
+	SubjectComputeList = base + ".compute.list"
+	SubjectComputeRoute = base + ".compute.route"
+
+	SubjectComputeLifecycle = prefix + ".compute.v1.instance.lifecycle"
+
+	SubjectInstancePrepare = base + ".instance.prepare"
+	SubjectInstanceRelease = base + ".instance.release"
+
+	SubjectEIPAllocate = base + ".eip.allocate"
+	SubjectEIPAssociate = base + ".eip.associate"
+	SubjectEIPDisassociate = base + ".eip.disassociate"
+
+	SubjectRDSExpose = base + ".rds.expose"
+	SubjectRDSUnexpose = base + ".rds.unexpose"
+}
 type Subscriber struct {
 	nc         *nats.Conn
 	netService service.NetworkService
+	prefix     string
 }
+func NewSubscriber(nc *nats.Conn, netService service.NetworkService, prefix string) *Subscriber {
 
-func NewSubscriber(nc *nats.Conn, netService service.NetworkService) *Subscriber {
+	InitSubjects(prefix)
+
 	return &Subscriber{
 		nc:         nc,
 		netService: netService,
+		prefix:     prefix,
 	}
 }
 

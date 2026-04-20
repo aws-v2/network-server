@@ -46,6 +46,8 @@ func main() {
 		zap.String("profile", cfg.Profile),
 	)
 
+ 
+
 	// 3. Connect to NATS
 	var nc *nats.Conn
 	opts := []nats.Option{}
@@ -209,7 +211,7 @@ func main() {
 	}
 
 	// 10. Setup NATS Subscriber
-	sub := natsTransport.NewSubscriber(nc, netService)
+	sub := natsTransport.NewSubscriber(nc, netService, cfg.NATS.SubjectPrefix)
 	if err := sub.Subscribe(); err != nil {
 		zap.L().Fatal("could not subscribe to NATS", zap.Error(err))
 	}

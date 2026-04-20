@@ -49,8 +49,10 @@ type NATSConfig struct {
 	MaxRetries    int
 	RetryInterval time.Duration
 	DialTimeout   time.Duration
+	SubjectPrefix string
 }
-
+	// subject := fmt.Sprintf("%s.network.v1.vpc.default.get", p.profile)
+// 
 type MinioConfig struct {
 	Endpoint  string
 	AccessKey string
@@ -114,6 +116,8 @@ func Load() (*Config, error) {
 			MaxRetries:    getEnvInt("NATS_MAX_RETRIES", 5),
 			RetryInterval: getEnvDuration("NATS_RETRY_INTERVAL", 2*time.Second),
 			DialTimeout:   getEnvDuration("NATS_DIAL_TIMEOUT", 2*time.Second),
+			SubjectPrefix: getEnv("NATS_SUBJECT_PREFIX", "dev.v1"),
+			
 		},
 		Minio: MinioConfig{
 			Endpoint:  getEnv("MINIO_ENDPOINT", "localhost:9000"),
@@ -128,6 +132,7 @@ func Load() (*Config, error) {
 			ShutdownTimeout: getEnvDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
 		},
 		Profile: profile,
+
 	}
 
 	return cfg, nil
