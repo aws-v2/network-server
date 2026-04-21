@@ -70,5 +70,5 @@ jobs:
               -e EUREKA_IP_ADDR=network-server-staging \
               -e EUREKA_VIP_ADDRESS=network-service \
               -e EUREKA_INSTANCE_ID=network-service-staging:8084 \
-              -e NATS_SUBJECT_PREFIX=dev.v1 \
+              -e NATS_SUBJECT_PREFIX=staging.v1 \
               qarani/network-server:staging

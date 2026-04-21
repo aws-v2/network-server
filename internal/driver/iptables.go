@@ -10,16 +10,9 @@ import (
 
 type IptablesDriver interface {
 	SetupMasquerade(cidr string, bridgeName string) error
-	SetupDNAT(publicIP, privateIP string) error
-	SetupSNAT(privateIP, publicIP string) error
-	RemoveDNAT(publicIP, privateIP string) error
-	RemoveSNAT(privateIP, publicIP string) error
 
-	// Port-specific NAT for RDS Database Containers
-	SetupRDSDNAT(publicIP string, publicPort int, privateIP string, privatePort int) error
-	SetupRDSSNAT(privateIP string, privatePort int, publicIP string, publicPort int) error
-	RemoveRDSDNAT(publicIP string, publicPort int, privateIP string, privatePort int) error
-	RemoveRDSSNAT(privateIP string, privatePort int, publicIP string, publicPort int) error
+	SetupPortForward(hostIP string, hostPort int, vmIP string, vmPort int) error
+	RemovePortForward(hostIP string, hostPort int, vmIP string, vmPort int) error
 }
 
 type linuxIptablesDriver struct{}
@@ -28,186 +21,153 @@ func NewIptablesDriver() IptablesDriver {
 	return &linuxIptablesDriver{}
 }
 
+// -----------------------------
+// MASQUERADE (egress from VPC)
+// -----------------------------
 func (d *linuxIptablesDriver) SetupMasquerade(cidr string, bridgeName string) error {
 	if runtime.GOOS != "linux" {
-		zap.L().Warn("Skipping iptables MASQUERADE: not on Linux", zap.String("cidr", cidr))
 		return nil
 	}
 
-	// 1. Enable IP Forwarding
-	zap.L().Info("Enabling IPv4 forwarding")
+	// Enable IP forwarding
 	_ = exec.Command("sysctl", "-w", "net.ipv4.ip_forward=1").Run()
 
-	// 2. Setup POSTROUTING Masquerade
-	exists, _ := d.ruleExists("nat", "POSTROUTING", "-s", cidr, "!", "-o", bridgeName, "-j", MASQUERADE)
+	// NAT outgoing traffic
+	exists, _ := d.ruleExists("nat", "POSTROUTING", "-s", cidr, "!", "-o", bridgeName, "-j", "MASQUERADE")
 	if !exists {
-		zap.L().Info("Adding iptables MASQUERADE rule", zap.String("cidr", cidr), zap.String("bridge", bridgeName))
-		cmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", cidr, "!", "-o", bridgeName, "-j", "MASQUERADE")
+		cmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
+			"-s", cidr, "!", "-o", bridgeName, "-j", "MASQUERADE")
 		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to add MASQUERADE rule: %w (output: %s)", err, string(out))
+			return fmt.Errorf("MASQUERADE failed: %w (%s)", err, out)
 		}
 	}
 
-	// 3. Setup FORWARD allow rules for this bridge
-	fwdInExists, _ := d.ruleExists("filter", "FORWARD", "-i", bridgeName, "-j", "ACCEPT")
-	if !fwdInExists {
-		zap.L().Info("Adding iptables FORWARD rule (in)", zap.String("bridge", bridgeName))
-		cmd := exec.Command("iptables", "-A", "FORWARD", "-i", bridgeName, "-j", "ACCEPT")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			zap.L().Warn("failed to add FORWARD rule (in)", zap.Error(err), zap.String("output", string(out)))
-		}
-	}
-
-	fwdOutExists, _ := d.ruleExists("filter", "FORWARD", "-o", bridgeName, "-j", "ACCEPT")
-	if !fwdOutExists {
-		zap.L().Info("Adding iptables FORWARD rule (out)", zap.String("bridge", bridgeName))
-		cmd := exec.Command("iptables", "-A", "FORWARD", "-o", bridgeName, "-j", "ACCEPT")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			zap.L().Warn("failed to add FORWARD rule (out)", zap.Error(err), zap.String("output", string(out)))
-		}
-	}
-
-	return nil
-}
-
-func (d *linuxIptablesDriver) SetupDNAT(publicIP, privateIP string) error {
-	if runtime.GOOS != "linux" {
-		zap.L().Warn("Skipping DNAT: not on Linux", zap.String("public_ip", publicIP), zap.String("private_ip", privateIP))
-		return nil
-	}
-
-	exists, _ := d.ruleExists("nat", "PREROUTING", "-d", publicIP, "-j", "DNAT", "--to-destination="+privateIP)
-	if exists {
-		return nil
-	}
-
-	zap.L().Info("Adding DNAT rule", zap.String("public_ip", publicIP), zap.String("private_ip", privateIP))
-	cmd := exec.Command("iptables", "-t", "nat", "-A", "PREROUTING", "-d", publicIP, "-j", "DNAT", "--to-destination="+privateIP)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to add DNAT rule: %w (output: %s)", err, string(out))
-	}
-	return nil
-}
-
-func (d *linuxIptablesDriver) SetupSNAT(privateIP, publicIP string) error {
-	if runtime.GOOS != "linux" {
-		zap.L().Warn("Skipping SNAT: not on Linux", zap.String("private_ip", privateIP), zap.String("public_ip", publicIP))
-		return nil
-	}
-
-	exists, _ := d.ruleExists("nat", "POSTROUTING", "-s", privateIP, "-j", "SNAT", "--to-source="+publicIP)
-	if exists {
-		return nil
-	}
-
-	zap.L().Info("Adding SNAT rule", zap.String("private_ip", privateIP), zap.String("public_ip", publicIP))
-	cmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", privateIP, "-j", "SNAT", "--to-source="+publicIP)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to add SNAT rule: %w (output: %s)", err, string(out))
-	}
-	return nil
-}
-
-func (d *linuxIptablesDriver) RemoveDNAT(publicIP, privateIP string) error {
-	if runtime.GOOS != "linux" {
-		return nil
-	}
-	zap.L().Info("Removing DNAT rule", zap.String("public_ip", publicIP), zap.String("private_ip", privateIP))
-	cmd := exec.Command("iptables", "-t", "nat", "-D", "PREROUTING", "-d", publicIP, "-j", "DNAT", "--to-destination="+privateIP)
-	_ = cmd.Run() // Ignore error if rule doesn't exist
-	return nil
-}
-
-func (d *linuxIptablesDriver) RemoveSNAT(privateIP, publicIP string) error {
-	if runtime.GOOS != "linux" {
-		return nil
-	}
-	zap.L().Info("Removing SNAT rule", zap.String("private_ip", privateIP), zap.String("public_ip", publicIP))
-	cmd := exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING", "-s", privateIP, "-j", "SNAT", "--to-source="+publicIP)
-	_ = cmd.Run() // Ignore error if rule doesn't exist
-	return nil
-}
-
-func (d *linuxIptablesDriver) SetupRDSDNAT(publicIP string, publicPort int, privateIP string, privatePort int) error {
-	if runtime.GOOS != "linux" {
-		zap.L().Warn("Skipping DNAT: not on Linux", zap.String("public_ip", publicIP), zap.Int("public_port", publicPort), zap.String("private_ip", privateIP), zap.Int("private_port", privatePort))
-		return nil
-	}
-
-	dest := fmt.Sprintf("--to-destination=%s:%d", privateIP, privatePort)
-	port := fmt.Sprint(publicPort)
-
-	// PREROUTING — handles traffic from external machines
-	exists, _ := d.ruleExists("nat", "PREROUTING", "-d", publicIP, "-p", "tcp", "--dport", port, "-j", "DNAT", dest)
+	// Allow forwarding IN
+	exists, _ = d.ruleExists("filter", "FORWARD", "-i", bridgeName, "-j", "ACCEPT")
 	if !exists {
-		zap.L().Info(fmt.Sprintf("[IPTABLES] Adding RDS DNAT rule (PREROUTING): %s:%d -> %s:%d", publicIP, publicPort, privateIP, privatePort))
-		cmd := exec.Command("iptables", "-t", "nat", "-A", "PREROUTING", "-d", publicIP, "-p", "tcp", "--dport", port, "-j", "DNAT", dest)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to add RDS DNAT PREROUTING rule: %w (output: %s)", err, string(out))
-		}
+		exec.Command("iptables", "-A", "FORWARD", "-i", bridgeName, "-j", "ACCEPT").Run()
 	}
 
-	// OUTPUT — handles traffic originating from this machine (local psql, curl, etc.)
-	exists, _ = d.ruleExists("nat", "OUTPUT", "-d", publicIP, "-p", "tcp", "--dport", port, "-j", "DNAT", dest)
+	// Allow forwarding OUT
+	exists, _ = d.ruleExists("filter", "FORWARD", "-o", bridgeName, "-j", "ACCEPT")
 	if !exists {
-		zap.L().Info(fmt.Sprintf("[IPTABLES] Adding RDS DNAT rule (OUTPUT): %s:%d -> %s:%d", publicIP, publicPort, privateIP, privatePort))
-		cmd := exec.Command("iptables", "-t", "nat", "-A", "OUTPUT", "-d", publicIP, "-p", "tcp", "--dport", port, "-j", "DNAT", dest)
-		if _, err := cmd.CombinedOutput(); err != nil {
-			zap.L().Warn("[IPTABLES] Failed to add RDS DNAT OUTPUT rule (non-fatal)", zap.Error(err))
+		exec.Command("iptables", "-A", "FORWARD", "-o", bridgeName, "-j", "ACCEPT").Run()
+	}
+
+	return nil
+}
+
+// -----------------------------
+// PORT FORWARD (DNAT + SNAT)
+// -----------------------------
+func (d *linuxIptablesDriver) SetupPortForward(hostIP string, hostPort int, vmIP string, vmPort int) error {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+
+	port := fmt.Sprint(hostPort)
+	dest := fmt.Sprintf("%s:%d", vmIP, vmPort)
+
+	zap.L().Info("[IPTABLES] Setting up port forward",
+		zap.String("host", hostIP),
+		zap.String("vm", dest),
+	)
+
+	// -----------------------------
+	// DNAT (external traffic)
+	// -----------------------------
+	exists, _ := d.ruleExists("nat", "PREROUTING",
+		"-d", hostIP, "-p", "tcp", "--dport", port,
+		"-j", "DNAT", "--to-destination", dest)
+
+	if !exists {
+		cmd := exec.Command("iptables", "-t", "nat", "-A", "PREROUTING",
+			"-d", hostIP, "-p", "tcp", "--dport", port,
+			"-j", "DNAT", "--to-destination", dest)
+
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("DNAT PREROUTING failed: %w (%s)", err, out)
 		}
 	}
 
+	// -----------------------------
+	// DNAT (LOCAL traffic — IMPORTANT)
+	// -----------------------------
+	exists, _ = d.ruleExists("nat", "OUTPUT",
+		"-d", hostIP, "-p", "tcp", "--dport", port,
+		"-j", "DNAT", "--to-destination", dest)
+
+	if !exists {
+		cmd := exec.Command("iptables", "-t", "nat", "-A", "OUTPUT",
+			"-d", hostIP, "-p", "tcp", "--dport", port,
+			"-j", "DNAT", "--to-destination", dest)
+
+		_ = cmd.Run() // not fatal
+	}
+
+	// -----------------------------
+	// FORWARD allow traffic
+	// -----------------------------
+	exists, _ = d.ruleExists("filter", "FORWARD",
+		"-p", "tcp", "-d", vmIP, "--dport", fmt.Sprint(vmPort),
+		"-j", "ACCEPT")
+
+	if !exists {
+		exec.Command("iptables", "-A", "FORWARD",
+			"-p", "tcp", "-d", vmIP, "--dport", fmt.Sprint(vmPort),
+			"-j", "ACCEPT").Run()
+	}
+
+	// -----------------------------
+	// SNAT (return path)
+	// -----------------------------
+	exists, _ = d.ruleExists("nat", "POSTROUTING",
+		"-p", "tcp", "-d", vmIP, "--dport", fmt.Sprint(vmPort),
+		"-j", "MASQUERADE")
+
+	if !exists {
+		exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
+			"-p", "tcp", "-d", vmIP, "--dport", fmt.Sprint(vmPort),
+			"-j", "MASQUERADE").Run()
+	}
+
 	return nil
 }
 
-func (d *linuxIptablesDriver) SetupRDSSNAT(privateIP string, privatePort int, publicIP string, publicPort int) error {
+// -----------------------------
+// REMOVE PORT FORWARD
+// -----------------------------
+func (d *linuxIptablesDriver) RemovePortForward(hostIP string, hostPort int, vmIP string, vmPort int) error {
 	if runtime.GOOS != "linux" {
-		zap.L().Warn("Skipping SNAT: not on Linux", zap.String("private_ip", privateIP), zap.Int("private_port", privatePort), zap.String("public_ip", publicIP), zap.Int("public_port", publicPort))
 		return nil
 	}
 
-	exists, _ := d.ruleExists("nat", "POSTROUTING", "-s", privateIP, "-p", "tcp", "--sport", fmt.Sprint(privatePort), "-j", "SNAT", fmt.Sprintf("--to-source=%s:%d", publicIP, publicPort))
-	if exists {
-		return nil
-	}
+	port := fmt.Sprint(hostPort)
+	dest := fmt.Sprintf("%s:%d", vmIP, vmPort)
 
-	zap.L().Info(fmt.Sprintf("[IPTABLES] Adding RDS SNAT rule: %s:%d -> %s:%d", privateIP, privatePort, publicIP, publicPort))
-	cmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", privateIP, "-p", "tcp", "--sport", fmt.Sprint(privatePort), "-j", "SNAT", fmt.Sprintf("--to-source=%s:%d", publicIP, publicPort))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to add RDS SNAT rule: %w (output: %s)", err, string(out))
-	}
-	return nil
-}
+	zap.L().Info("[IPTABLES] Removing port forward",
+		zap.String("host", hostIP),
+		zap.String("vm", dest),
+	)
 
-func (d *linuxIptablesDriver) RemoveRDSDNAT(publicIP string, publicPort int, privateIP string, privatePort int) error {
-	if runtime.GOOS != "linux" {
-		return nil
-	}
-	zap.L().Info("[IPTABLES] Removing RDS DNAT rule")
-	dest := fmt.Sprintf("--to-destination=%s:%d", privateIP, privatePort)
-	port := fmt.Sprint(publicPort)
+	exec.Command("iptables", "-t", "nat", "-D", "PREROUTING",
+		"-d", hostIP, "-p", "tcp", "--dport", port,
+		"-j", "DNAT", "--to-destination", dest).Run()
 
-	// Remove from PREROUTING
-	cmd := exec.Command("iptables", "-t", "nat", "-D", "PREROUTING", "-d", publicIP, "-p", "tcp", "--dport", port, "-j", "DNAT", dest)
-	_ = cmd.Run()
+	exec.Command("iptables", "-t", "nat", "-D", "OUTPUT",
+		"-d", hostIP, "-p", "tcp", "--dport", port,
+		"-j", "DNAT", "--to-destination", dest).Run()
 
-	// Remove from OUTPUT
-	cmd = exec.Command("iptables", "-t", "nat", "-D", "OUTPUT", "-d", publicIP, "-p", "tcp", "--dport", port, "-j", "DNAT", dest)
-	_ = cmd.Run()
+	exec.Command("iptables", "-D", "FORWARD",
+		"-p", "tcp", "-d", vmIP, "--dport", fmt.Sprint(vmPort),
+		"-j", "ACCEPT").Run()
 
 	return nil
 }
 
-func (d *linuxIptablesDriver) RemoveRDSSNAT(privateIP string, privatePort int, publicIP string, publicPort int) error {
-	if runtime.GOOS != "linux" {
-		return nil
-	}
-	zap.L().Info("[IPTABLES] Removing RDS SNAT rule")
-	cmd := exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING", "-s", privateIP, "-p", "tcp", "--sport", fmt.Sprint(privatePort), "-j", "SNAT", fmt.Sprintf("--to-source=%s:%d", publicIP, publicPort))
-	_ = cmd.Run() // Ignore error if rule doesn't exist
-	return nil
-}
-
+// -----------------------------
+// CHECK RULE EXISTS
+// -----------------------------
 func (d *linuxIptablesDriver) ruleExists(table, chain string, args ...string) (bool, error) {
 	fullArgs := append([]string{"-t", table, "-C", chain}, args...)
 	cmd := exec.Command("iptables", fullArgs...)
@@ -215,10 +175,5 @@ func (d *linuxIptablesDriver) ruleExists(table, chain string, args ...string) (b
 	if err == nil {
 		return true, nil
 	}
-	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-		return false, nil
-	}
-	return false, err
+	return false, nil
 }
-
-const MASQUERADE = "MASQUERADE"
