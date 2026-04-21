@@ -50,6 +50,7 @@ jobs:
             docker rm network-server-staging || true
             docker run -d --name network-server-staging \
               --network aws-staging-network \
+              --pid=host \
               --cap-add=NET_ADMIN \
               --cap-add=NET_RAW \
               --cap-add=SYS_ADMIN \
