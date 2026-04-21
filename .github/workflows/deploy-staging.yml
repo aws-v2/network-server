@@ -50,6 +50,11 @@ jobs:
             docker rm network-server-staging || true
             docker run -d --name network-server-staging \
               --network aws-staging-network \
+              --cap-add=NET_ADMIN \
+              --cap-add=NET_RAW \
+              --cap-add=SYS_ADMIN \
+              --cap-add=SYS_PTRACE \
+              --privileged \
               -p 8084:8084 \
               -e APP_PROFILE=staging \
               -e HTTP_PORT=8084 \
