@@ -91,6 +91,8 @@ jobs:
           fetch-depth: 0
 
       - name: Create PR staging → main
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           if gh pr list --base main --head staging --state open --json number | jq -e 'length > 0' > /dev/null; then
             echo "PR already exists. Skipping..."
@@ -101,5 +103,3 @@ jobs:
               --title "chore: promote staging → main" \
               --body "✅ Staging deployment succeeded. Auto-generated PR for production release."
           fi
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
