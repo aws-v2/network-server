@@ -25,7 +25,12 @@ WORKDIR /app
 
 # Install certificates
 RUN apk --no-cache add ca-certificates
-
+RUN apt-get update && apt-get install -y \
+    iptables \
+    iproute2 \
+    bridge-utils \
+    && rm -rf /var/lib/apt/lists/*
+    
 # Copy the binary from the builder stage
 COPY --from=builder /app/network-service .
 # Copy migrations
