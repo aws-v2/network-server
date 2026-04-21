@@ -3,42 +3,32 @@ FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
-# Install build dependencies
 RUN apk add --no-cache git
 
-# Copy go mod and sum files
 COPY go.mod go.sum ./
-
-# Download dependencies
 RUN go mod download
 
-# Copy source code
 COPY . .
 
-# Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -o network-service ./cmd/api
+
 
 # Final stage
 FROM alpine:latest
 
 WORKDIR /app
 
-# Install certificates
-RUN apk --no-cache add ca-certificates
-RUN apt-get update && apt-get install -y \
+# required runtime deps for iptables/network tools
+RUN apk add --no-cache \
+    ca-certificates \
     iptables \
     iproute2 \
-    bridge-utils \
-    && rm -rf /var/lib/apt/lists/*
-    
-# Copy the binary from the builder stage
+    bridge-utils
+
 COPY --from=builder /app/network-service .
-# Copy migrations
 COPY --from=builder /app/internal/infrastructure/migrations ./internal/infrastructure/migrations
 COPY --from=builder /app/docs ./docs
 
-# Expose the port
 EXPOSE 8084
 
-# Run the binary
 CMD ["./network-service"]
