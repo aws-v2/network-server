@@ -42,10 +42,10 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             docker pull qarani/network-server:prod
-            docker stop network-server || true
-            docker rm network-server || true
+            docker stop network-server-prod || true
+            docker rm network-server-prod || true
             docker network create aws-prod-network || true
-            docker run -d --name network-server \
+            docker run -d --name network-server-prod \
               --network aws-prod-network \
               --pid=host \
               --cap-add=NET_ADMIN \
