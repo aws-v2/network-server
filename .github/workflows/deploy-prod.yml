@@ -1,4 +1,4 @@
-name: Prod deployment
+name: Prod deployment env
 
 on:
   push:
