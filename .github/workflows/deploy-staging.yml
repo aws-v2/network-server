@@ -3,10 +3,38 @@ name: Staging Deployment
 on:
   push:
     branches: [ "staging" ]
+  pull_request:
+    branches: [ "staging" ]
 
 jobs:
-  build-and-push:
+  staging-test:
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+      - name: Install libvirt dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvirt-dev \
+            libvirt-daemon \
+            pkg-config
+      - name: Download dependencies
+        run: go mod download
+      - name: Build
+        run: go build ./...
+      - name: Run tests
+        run: go test ./... -v
+
+  staging-build-image:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    needs: staging-test
     steps:
     - uses: actions/checkout@v4
 
@@ -26,8 +54,9 @@ jobs:
         push: true
         tags: qarani/network-server:staging
 
-  deploy:
-    needs: build-and-push
+
+  staging-deploy:
+    needs: staging-build-image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +111,8 @@ jobs:
 
 
   open-pr-to-main:
-    needs: deploy
+    needs: staging-deploy
+    if: github.event_name == 'push'
 
     runs-on: ubuntu-latest
     steps:
@@ -103,3 +133,39 @@ jobs:
               --title "chore: promote staging → main" \
               --body "✅ Staging deployment succeeded. Auto-generated PR for production release."
           fi
+
+
+
+
+  # post_linkedin:
+  #   runs-on: ubuntu-latest
+
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+
+  #     - name: Set up Go
+  #       uses: actions/setup-go@v5
+  #       with:
+  #         go-version: '1.25'
+
+  #     - name: Run tests
+  #       run: go test ./...
+
+  #     - name: Get diff
+  #       id: diff
+  #       run: |
+  #         PREV_COMMIT=$(git rev-parse HEAD~1)
+  #         git diff $PREV_COMMIT HEAD > diff.txt
+  #         echo "diff<<EOF" >> $GITHUB_OUTPUT
+  #         cat diff.txt >> $GITHUB_OUTPUT
+  #         echo "EOF" >> $GITHUB_OUTPUT
+
+  #     - name: Call centralized LinkedIn Poster Service
+  #       env:
+  #         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  #         LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
+  #       run: |
+  #         curl -X POST https://linkedin-poster.example.com/post \
+  #           -H "Content-Type: application/json" \
+  #           -d "{\"repo\":\"${GITHUB_REPOSITORY}\", \"diff\":\"${{ steps.diff.outputs.diff }}\"}"

@@ -1,60 +1,105 @@
-name: Prod deployment.
+name: Prod deployment
 
 on:
   push:
     branches: ["main"]
+  pull_request:
+    branches: ["main"]
 
 jobs:
-  build-and-push:
+  prod-test:
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+      - name: Install libvirt dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvirt-dev \
+            libvirt-daemon \
+            pkg-config
+      - name: Download dependencies
+        run: go mod download
+      - name: Build
+        run: go build ./...
+      - name: Run tests
+        run: go test ./... -v
 
+  prod-build:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    needs: prod-test
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Build and push
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: qarani/network-server:prod
+
+  prod-deploy:
+    needs: prod-build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: qarani/network-server:latest
-
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-
-      - name: Deploy to EC2 via SSH
+      - name: Deploy to EC2 via SSH.
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            docker pull qarani/network-server:latest
-            docker stop network-server || true
-            docker rm network-server || true
-            docker network create mini-aws-network || true
-            docker run -d --name network-server \
-              --network mini-aws-network \
+            docker pull qarani/network-server:prod
+            docker stop network-server-prod || true
+            docker rm network-server-prod || true
+            docker network create aws-prod-network || true
+            docker run -d --name network-server-prod \
+              --network aws-prod-network \
+              --pid=host \
+              --cap-add=NET_ADMIN \
+              --cap-add=NET_RAW \
+              --cap-add=SYS_ADMIN \
+              --cap-add=SYS_PTRACE \
+              --privileged \
               -p 8084:8084 \
               -e APP_PROFILE=prod \
-              -e DB_HOST=${{ secrets.PROD_DB_HOST }} \
+              -e HTTP_PORT=8084 \
+              -e PUBLIC_INTERFACE=eth0 \
+              -e DB_HOST=postgres-prod \
               -e DB_PORT=5432 \
-              -e DB_USER=${{ secrets.PROD_DB_USER }} \
-              -e DB_PASSWORD=${{ secrets.PROD_DB_PASSWORD }} \
-              -e DB_NAME=${{ secrets.PROD_DB_NAME }} \
-              -e NATS_URL=${{ secrets.PROD_NATS_URL }} \
-              -e NATS_USER=${{ secrets.PROD_NATS_USER }} \
-              -e NATS_PASSWORD=${{ secrets.PROD_NATS_PASSWORD }} \
-              qarani/network-server:latest
+              -e DOCS_PATH=/app/docs \
+              -e DB_USER=postgres-prod-user \
+              -e DB_PASSWORD=postgres-prod-password \
+              -e DB_NAME=network_db \
+              -e DB_SSLMODE=disable \
+              -e NATS_URL=nats://nats-prod:4222 \
+              -e NATS_USER=nats-prod-user \
+              -e NATS_PASSWORD=nats-prod-password \
+              -e EUREKA_SERVER_URL=http://discovery-server-prod:8761/eureka \
+              -e EUREKA_APP_NAME=NETWORK-SERVICE \
+              -e EUREKA_HOSTNAME=network-server-prod \
+              -e EUREKA_IP_ADDR=network-server-prod \
+              -e EUREKA_VIP_ADDRESS=network-service \
+              -e EUREKA_INSTANCE_ID=network-service-prod:8084 \
+              -e NATS_SUBJECT_PREFIX=prod.v1 \
+              qarani/network-server:prod
