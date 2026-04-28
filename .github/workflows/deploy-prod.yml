@@ -61,13 +61,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTH_KEY }}
 
-      - name: Deploy to EC2 via SSH.
+      - name: Deploy to Prod via SSH over Tailscale
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME }}
-          key: ${{ secrets.EC2_SSH_KEY }}
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USERNAME }}
+          key: ${{ secrets.PROD_SSH_KEY }}
           script: |
             docker pull qarani/network-server:prod
             docker stop network-server-prod || true
