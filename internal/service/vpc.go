@@ -381,7 +381,10 @@ func (s *networkService) ResolveVPCNetwork(ctx context.Context, tenantID, vpcID 
 
 	l.Info("Resolved network for VPC",
 		zap.String("vpc_id", vpc.ID),
-		zap.String("subnet_id", defaultSubnetID))
+		zap.String("subnet_id", defaultSubnetID),
+		zap.String("bridge_name", vpc.BridgeName),
+	
+	)
 
 	return vpc.ID, defaultSubnetID, vpc.BridgeName, nil
 }
