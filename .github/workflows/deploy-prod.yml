@@ -74,36 +74,32 @@ jobs:
           key: ${{ secrets.PROD_SSH_KEY }}
           script: |
             docker pull qarani/network-server:prod
-            docker stop network-server-prod || true
-            docker rm network-server-prod || true
-            docker network create aws-prod-network || true
-            docker run -d --name network-server-prod \
+            docker service rm network-server-prod || true
+            docker service create \
+              --name network-server-prod \
               --network aws-prod-network \
-              --pid=host \
-              --cap-add=NET_ADMIN \
-              --cap-add=NET_RAW \
-              --cap-add=SYS_ADMIN \
-              --cap-add=SYS_PTRACE \
-              --privileged \
-              -p 8084:8084 \
-              -e APP_PROFILE=prod \
-              -e HTTP_PORT=8084 \
-              -e PUBLIC_INTERFACE=eth0 \
-              -e DB_HOST=postgres-prod \
-              -e DB_PORT=5432 \
-              -e DOCS_PATH=/app/docs \
-              -e DB_USER=postgres-prod-user \
-              -e DB_PASSWORD=postgres-prod-password \
-              -e DB_NAME=network_db \
-              -e DB_SSLMODE=disable \
-              -e NATS_URL=nats://nats-prod:4222 \
-              -e NATS_USER=nats-prod-user \
-              -e NATS_PASSWORD=nats-prod-password \
-              -e EUREKA_SERVER_URL=http://discovery-server-prod:8761/eureka \
-              -e EUREKA_APP_NAME=NETWORK-SERVICE \
-              -e EUREKA_HOSTNAME=network-server-prod \
-              -e EUREKA_IP_ADDR=network-server-prod \
-              -e EUREKA_VIP_ADDRESS=network-service \
-              -e EUREKA_INSTANCE_ID=network-service-prod:8084 \
-              -e NATS_SUBJECT_PREFIX=prod.v1 \
+              --publish published=8084,target=8084 \
+              --cap-add NET_ADMIN \
+              --cap-add NET_RAW \
+              --cap-add SYS_ADMIN \
+              --cap-add SYS_PTRACE \
+              --env APP_PROFILE=prod \
+              --env HTTP_PORT=8084 \
+              --env PUBLIC_INTERFACE=eth0 \
+              --env DB_HOST=postgres-prod \
+              --env DB_PORT=5432 \
+              --env DB_USER=postgres-prod-user \
+              --env DB_PASSWORD=postgres-prod-password \
+              --env DB_NAME=network_db \
+              --env DB_SSLMODE=disable \
+              --env NATS_URL=nats://nats-prod:4222 \
+              --env NATS_USER=nats-prod-user \
+              --env NATS_PASSWORD=nats-prod-password \
+              --env NATS_SUBJECT_PREFIX=prod.v1 \
+              --env EUREKA_SERVER_URL=http://discovery-server-prod:8761/eureka \
+              --env EUREKA_APP_NAME=NETWORK-SERVICE \
+              --env EUREKA_HOSTNAME=network-server-prod \
+              --env EUREKA_IP_ADDR=network-server-prod \
+              --env EUREKA_VIP_ADDRESS=network-service \
+              --env EUREKA_INSTANCE_ID=network-service-prod:8084 \
               qarani/network-server:prod
